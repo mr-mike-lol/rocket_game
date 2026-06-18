@@ -6,6 +6,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { PlayerStats, RocketSkin, ROCKET_SKINS, SEASONS, COSMIC_WEAPONS } from '../types';
 import { Play, Pause, RotateCcw, Volume2, VolumeX, ShieldAlert, Zap, Maximize, Minimize } from 'lucide-react';
+import VirtualControls from './VirtualControls';
 
 interface CosmicFieldProps {
   selectedSkinId: string;
@@ -61,6 +62,39 @@ class Particle {
   }
 }
 
+// Cached AudioContext to avoid massive resource leaking at high score/high shooting rate
+let sharedAudioCtx: AudioContext | null = null;
+
+export const DIFFICULTY_CONFIGS = {
+  easy: {
+    multiplier: 0.6,
+    amplitudeCoeff: 0.04,
+    frequency: 0.02,
+    baseSpeed: 2.4,
+    label: 'Легкий (Екіпаж)',
+    color: 'text-emerald-400 border-emerald-500/30 bg-emerald-950/20 hover:bg-emerald-950/40',
+    activeColor: 'bg-emerald-500 text-slate-950 shadow-[0_0_12px_rgba(16,185,129,0.35)]',
+  },
+  medium: {
+    multiplier: 1.0,
+    amplitudeCoeff: 0.08,
+    frequency: 0.038,
+    baseSpeed: 3.2,
+    label: 'Середній (Пілот)',
+    color: 'text-cyan-400 border-cyan-500/30 bg-cyan-950/20 hover:bg-cyan-950/40',
+    activeColor: 'bg-cyan-500 text-slate-950 shadow-[0_0_12px_rgba(6,182,212,0.35)]',
+  },
+  hard: {
+    multiplier: 1.6,
+    amplitudeCoeff: 0.13,
+    frequency: 0.06,
+    baseSpeed: 4.0,
+    label: 'Складний (Ас)',
+    color: 'text-rose-400 border-rose-500/30 bg-rose-950/20 hover:bg-rose-950/40',
+    activeColor: 'bg-rose-500 text-slate-950 shadow-[0_0_12px_rgba(244,63,94,0.35)]',
+  },
+};
+
 export default function CosmicField({
   selectedSkinId,
   gameState,
@@ -77,6 +111,21 @@ export default function CosmicField({
   const [isPlaying, setIsPlaying] = useState(false);
   const [soundEnabled, setSoundEnabled] = useState(true);
   const [isTheaterMode, setIsTheaterMode] = useState(false);
+  const [difficulty, setDifficulty] = useState<'easy' | 'medium' | 'hard'>('medium');
+  const [boostCooldownTick, setBoostCooldownTick] = useState(0);
+
+  // Load difficulty on mount
+  useEffect(() => {
+    const cachedDiff = localStorage.getItem('rocket_cosmic_difficulty');
+    if (cachedDiff === 'easy' || cachedDiff === 'medium' || cachedDiff === 'hard') {
+      setDifficulty(cachedDiff);
+    }
+  }, []);
+
+  const handleSelectDifficulty = (diff: 'easy' | 'medium' | 'hard') => {
+    setDifficulty(diff);
+    localStorage.setItem('rocket_cosmic_difficulty', diff);
+  };
 
   // Sync state with HTML5 native fullscreen events
   useEffect(() => {
@@ -141,6 +190,7 @@ export default function CosmicField({
 
     // Timing stats
     startTimeMs: 0,
+    lastFiredTime: 0,
     bossesSlayed: 0,
     kremlinsSlayed: 0,
     boostsPerformed: 0,
@@ -148,6 +198,14 @@ export default function CosmicField({
     // Spawning metrics
     kremlinSpawnTimer: 0,
     powerUpSpawnTimer: 0,
+
+    // Waves mechanics
+    waveTimer: 0,
+    waveActive: false,
+    waveSpawnCount: 0,
+    waveSpawnMax: 0,
+    waveNextSpawnTimer: 0,
+    wavePattern: 'staggered',
 
     // Boost attributes
     isAccelerating: false,
@@ -160,7 +218,7 @@ export default function CosmicField({
     dyInput: 0,
 
     // Entities lists
-    stars: [] as Array<{ x: number; y: number; r: number; speed: number; color: string }>,
+    stars: [] as Array<{ x: number; y: number; r: number; speed: number; color: string; depth?: number }>,
     projectiles: [] as any[],
     bossProjectiles: [] as any[],
     kremlins: [] as any[],
@@ -169,9 +227,9 @@ export default function CosmicField({
 
     // Boss attributes
     isBossActive: false,
-    boss: null as any,
-    nextBossSpawnScore: 1000,
-    bossInterval: 1000,
+    bosses: [] as any[],
+    nextBossSpawnScore: 3000,
+    bossInterval: 3000,
 
     // Upgraded Pilot Inventory attributes
     shieldChargesLeft: 0,
@@ -185,7 +243,13 @@ export default function CosmicField({
   const playSound = (type: 'shoot' | 'explosion' | 'star' | 'bossSpawn' | 'bossHit' | 'gameover' | 'boost') => {
     if (!soundEnabled) return;
     try {
-      const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
+      if (!sharedAudioCtx) {
+        sharedAudioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
+      }
+      const audioCtx = sharedAudioCtx;
+      if (audioCtx.state === 'suspended') {
+        audioCtx.resume();
+      }
       const osc = audioCtx.createOscillator();
       const gain = audioCtx.createGain();
       osc.connect(gain);
@@ -276,6 +340,7 @@ export default function CosmicField({
   // Handle external mobile control gestures
   useEffect(() => {
     if (gameState !== 'playing') return;
+    if (!mobileDirectPress) return; // Guard: do not override local touch inputs with 0 when idle
     const verticalVelocity = BASE_HEIGHT * 0.013;
     if (mobileDirectPress === 'up') {
       stateRef.current.dyInput = -verticalVelocity;
@@ -304,6 +369,13 @@ export default function CosmicField({
   const triggerWeaponFire = () => {
     const s = stateRef.current;
     if (gameState !== 'playing') return;
+
+    // Rate limiting to preserve frame times and avoid duplicate key spams
+    const now = Date.now();
+    if (now - (s.lastFiredTime || 0) < 110) {
+      return;
+    }
+    s.lastFiredTime = now;
 
     const miniOffsetTop = 15;
     const miniOffsetBottom = -15;
@@ -396,6 +468,7 @@ export default function CosmicField({
       const s = stateRef.current;
       if (s.gameState !== 'playing') {
         if (e.key === 'Enter') {
+          e.preventDefault();
           setGameState('playing');
         }
         return;
@@ -403,18 +476,23 @@ export default function CosmicField({
 
       const vertVelocity = BASE_HEIGHT * 0.013;
       if (e.key === 'ArrowUp' || e.key === 'w' || e.key === 'W') {
+        e.preventDefault();
         s.dyInput = -vertVelocity;
       }
       if (e.key === 'ArrowDown' || e.key === 's' || e.key === 'S') {
+        e.preventDefault();
         s.dyInput = vertVelocity;
       }
       if (e.key === ' ') {
+        e.preventDefault();
         triggerWeaponFire();
       }
       if (e.key === 'x' || e.key === 'X' || e.key === 'Shift') {
+        e.preventDefault();
         triggerEngineBoost();
       }
       if (e.key === 'p' || e.key === 'P') {
+        e.preventDefault();
         setGameState('paused');
       }
     };
@@ -422,6 +500,7 @@ export default function CosmicField({
     const handleKeyUp = (e: KeyboardEvent) => {
       const s = stateRef.current;
       if (e.key === 'ArrowUp' || e.key === 'w' || e.key === 'W' || e.key === 'ArrowDown' || e.key === 's' || e.key === 'S') {
+        e.preventDefault();
         s.dyInput = 0;
       }
     };
@@ -468,6 +547,9 @@ export default function CosmicField({
 
     const s = stateRef.current;
 
+    const config = DIFFICULTY_CONFIGS[difficulty] || DIFFICULTY_CONFIGS.medium;
+    s.baseGameSpeed = config.baseSpeed;
+
     // Sync upgrades initially
     s.maxShieldCharges = stats.shieldCoreLevel || 0;
     // Keep current charge context intact or recharge if starting playing state
@@ -481,12 +563,28 @@ export default function CosmicField({
     const activeSeason = SEASONS[s.currentSeasonIdx];
     s.stars = [];
     for (let i = 0; i < activeSeason.starCount; i++) {
+      const rand = Math.random();
+      let depth = 1; // 1 = far (slow, small), 2 = mid (neutral), 3 = close (fast, large)
+      let r = Math.random() * 0.7 + 0.3; // small
+      let starSpeed = Math.random() * 0.15 + 0.1; // slow
+
+      if (rand > 0.50 && rand <= 0.85) {
+        depth = 2;
+        r = Math.random() * 0.9 + 1.1; // medium
+        starSpeed = Math.random() * 0.3 + 0.35; // medium
+      } else if (rand > 0.85) {
+        depth = 3;
+        r = Math.random() * 1.0 + 2.2; // large
+        starSpeed = Math.random() * 0.6 + 0.90; // fast
+      }
+
       s.stars.push({
         x: Math.random() * BASE_WIDTH,
         y: Math.random() * BASE_HEIGHT,
-        r: Math.random() * 2 + 0.4,
-        speed: Math.random() * 0.6 + 0.15,
+        r,
+        speed: starSpeed,
         color: activeSeason.starColor,
+        depth,
       });
     }
 
@@ -509,6 +607,7 @@ export default function CosmicField({
 
       // Render Screen Shake offset shifts
       ctx.save();
+
       if (s.screenShakeActive && Date.now() < s.screenShakeEndTime) {
         const dx = (Math.random() - 0.5) * 2 * s.screenShakeMagnitude * flexScale;
         const dy = (Math.random() - 0.5) * 2 * s.screenShakeMagnitude * flexScale;
@@ -527,10 +626,27 @@ export default function CosmicField({
           star.x = BASE_WIDTH;
           star.y = Math.random() * BASE_HEIGHT;
         }
-        ctx.fillStyle = star.color;
+
         ctx.beginPath();
-        ctx.arc(star.x * flexScale, star.y * flexScale, star.r * flexScale, 0, Math.PI * 2);
-        ctx.fill();
+        const d = star.depth || 1;
+        if (d === 1) {
+          // Far stars: dimmer and bluish/softer
+          ctx.fillStyle = star.color === '#ffffff' ? 'rgba(255, 255, 255, 0.35)' : `${star.color}55`;
+          ctx.arc(star.x * flexScale, star.y * flexScale, star.r * flexScale, 0, Math.PI * 2);
+          ctx.fill();
+        } else if (d === 2) {
+          // Mid level standard stars: fully opaque
+          ctx.fillStyle = star.color;
+          ctx.arc(star.x * flexScale, star.y * flexScale, star.r * flexScale, 0, Math.PI * 2);
+          ctx.fill();
+        } else {
+          // Near stars: bright white, speed lines shape (especially on engine boosts)
+          ctx.fillStyle = '#ffffff';
+          const speedMultiplier = s.isAccelerating ? 4.0 : 1.3;
+          const starWidth = star.r * speedMultiplier;
+          ctx.rect((star.x - starWidth) * flexScale, star.y * flexScale, starWidth * flexScale, star.r * 1.1 * flexScale);
+          ctx.fill();
+        }
       });
 
       // Render glowing particle debris explosions (pure aesthetic enhancement!)
@@ -553,9 +669,9 @@ export default function CosmicField({
           onAddNotification('Увага: Форсаж почав перезаряджання...', 'info');
         }
 
-        // Apply input physics with oscillation mechanics
-        const amplitude = BASE_HEIGHT * 0.08;
-        const frequency = 0.038;
+        // Apply input physics with oscillation mechanics (amplitude & frequency based on selected difficulty)
+        const amplitude = BASE_HEIGHT * config.amplitudeCoeff;
+        const frequency = config.frequency;
         s.rocketBaseY += s.dyInput;
 
         // Barrier checks for fluid maneuvers
@@ -573,43 +689,117 @@ export default function CosmicField({
 
         // ---------------- ENTITY COLLISION PHYSICS ----------------
 
-        // Spawning timer updates
-        s.kremlinSpawnTimer++;
-        const dynamicInterval = Math.max(50, 140 - Math.floor(s.score * 0.05));
-        if (s.kremlinSpawnTimer >= dynamicInterval) {
-          s.kremlinSpawnTimer = 0;
-          
-          // Randomize tower types related to Russian institutions
-          const types = ['spire', 'telecom', 'lubyanka', 'skyscraper', 'bunker'];
-          const chosenType = types[Math.floor(Math.random() * types.length)];
-          
-          let dynamicWidth = 55;
-          let dynamicHeight = Math.random() * 80 + 120;
-          
-          if (chosenType === 'spire') { // Spasskaya Spire
-            dynamicWidth = Math.floor(Math.random() * 20 + 45); // 45 to 65
-            dynamicHeight = Math.floor(Math.random() * 110 + 120); // 120 to 230
-          } else if (chosenType === 'telecom') { // Ostankino Tower
-            dynamicWidth = Math.floor(Math.random() * 10 + 35); // 35 to 45
-            dynamicHeight = Math.floor(Math.random() * 120 + 170); // 170 to 290
-          } else if (chosenType === 'lubyanka') { // Lubyanka Citadel
-            dynamicWidth = Math.floor(Math.random() * 30 + 75); // 75 to 105
-            dynamicHeight = Math.floor(Math.random() * 60 + 100); // 100 to 160
-          } else if (chosenType === 'skyscraper') { // Gazprom Lakhta / Moscow City
-            dynamicWidth = Math.floor(Math.random() * 20 + 45); // 45 to 65
-            dynamicHeight = Math.floor(Math.random() * 110 + 160); // 160 to 270
-          } else if (chosenType === 'bunker') { // Stepped Bunker Mausoleum
-            dynamicWidth = Math.floor(Math.random() * 35 + 80); // 80 to 115
-            dynamicHeight = Math.floor(Math.random() * 40 + 85); // 85 to 125
+        // Waves of Enemies Spawning Logic
+        if (!s.isBossActive) {
+          s.waveTimer++;
+          // Trigger a sudden, structured wave every 900 frames (approx 15 seconds) if offline
+          if (s.waveTimer >= 900 && !s.waveActive) {
+            s.waveActive = true;
+            s.waveSpawnCount = 0;
+            s.waveSpawnMax = 4 + Math.floor(Math.random() * 3); // 4 to 6 wave enemies
+            s.waveNextSpawnTimer = 0;
+
+            const patterns = ['staggered', 'escalating', 'bunker_wall'];
+            s.wavePattern = patterns[Math.floor(Math.random() * patterns.length)];
+
+            const uPatternName = s.wavePattern === 'staggered'
+              ? 'Шаховий'
+              : s.wavePattern === 'escalating'
+              ? 'Східчастий'
+              : 'Загороджувальний';
+
+            onAddNotification(`⚠️ УВАГА: ШТУРМОВА ХВИЛЯ СУДЕН-ДРОНІВ (Паттерн: ${uPatternName})!`, 'boss');
+            playSound('bossSpawn');
           }
-          
-          s.kremlins.push({
-            x: BASE_WIDTH + 80,
-            y: Math.random() * (BASE_HEIGHT - dynamicHeight) + dynamicHeight / 2,
-            w: dynamicWidth,
-            h: dynamicHeight,
-            type: chosenType,
-          });
+        } else {
+          s.waveActive = false;
+          s.waveTimer = 0;
+        }
+
+        if (s.waveActive) {
+          s.waveNextSpawnTimer++;
+          // Wave spires spawn much faster (interval depends on difficulty)
+          const waveInterval = difficulty === 'hard' ? 22 : difficulty === 'easy' ? 38 : 30;
+          if (s.waveNextSpawnTimer >= waveInterval) {
+            s.waveNextSpawnTimer = 0;
+
+            let y = BASE_HEIGHT / 2;
+            let height = 140;
+            let width = 50;
+            const step = s.waveSpawnCount;
+
+            if (s.wavePattern === 'staggered') {
+              height = 130 + Math.random() * 40;
+              y = (step % 2 === 0) ? (height / 2 + 35) : (BASE_HEIGHT - height / 2 - 35);
+            } else if (s.wavePattern === 'escalating') {
+              height = 120 + (step * 25);
+              y = 90 + (step * 80);
+              if (y > BASE_HEIGHT - height / 2 - 40) {
+                y = BASE_HEIGHT / 2;
+              }
+            } else { // bunker_wall
+              height = 170;
+              width = 70;
+              y = (step === 0 || step === 2 || step === 4) ? (height / 2 + 20) : (BASE_HEIGHT - height / 2 - 20);
+            }
+
+            const waveTowerTypes = ['spire', 'telecom', 'lubyanka', 'skyscraper', 'bunker'];
+            const chosenType = waveTowerTypes[Math.floor(Math.random() * waveTowerTypes.length)];
+
+            s.kremlins.push({
+              x: BASE_WIDTH + 80,
+              y: y,
+              w: width,
+              h: height,
+              type: chosenType,
+              isWaveObstacle: true,
+            });
+
+            s.waveSpawnCount++;
+            if (s.waveSpawnCount >= s.waveSpawnMax) {
+              s.waveActive = false;
+              s.waveTimer = 0; // reset
+            }
+          }
+        } else {
+          // Regular spire spawning flow
+          s.kremlinSpawnTimer++;
+          const dynamicInterval = Math.max(50, 140 - Math.floor(s.score * 0.05));
+          if (s.kremlinSpawnTimer >= dynamicInterval) {
+            s.kremlinSpawnTimer = 0;
+            
+            // Randomize tower types related to Russian institutions
+            const types = ['spire', 'telecom', 'lubyanka', 'skyscraper', 'bunker'];
+            const chosenType = types[Math.floor(Math.random() * types.length)];
+            
+            let dynamicWidth = 55;
+            let dynamicHeight = Math.random() * 80 + 120;
+            
+            if (chosenType === 'spire') { // Spasskaya Spire
+              dynamicWidth = Math.floor(Math.random() * 20 + 45); // 45 to 65
+              dynamicHeight = Math.floor(Math.random() * 110 + 120); // 120 to 230
+            } else if (chosenType === 'telecom') { // Ostankino Tower
+              dynamicWidth = Math.floor(Math.random() * 10 + 35); // 35 to 45
+              dynamicHeight = Math.floor(Math.random() * 120 + 170); // 170 to 290
+            } else if (chosenType === 'lubyanka') { // Lubyanka Citadel
+              dynamicWidth = Math.floor(Math.random() * 30 + 75); // 75 to 105
+              dynamicHeight = Math.floor(Math.random() * 60 + 100); // 100 to 160
+            } else if (chosenType === 'skyscraper') { // Gazprom Lakhta / Moscow City
+              dynamicWidth = Math.floor(Math.random() * 20 + 45); // 45 to 65
+              dynamicHeight = Math.floor(Math.random() * 110 + 160); // 160 to 270
+            } else if (chosenType === 'bunker') { // Stepped Bunker Mausoleum
+              dynamicWidth = Math.floor(Math.random() * 35 + 80); // 80 to 115
+              dynamicHeight = Math.floor(Math.random() * 40 + 85); // 85 to 125
+            }
+            
+            s.kremlins.push({
+              x: BASE_WIDTH + 80,
+              y: Math.random() * (BASE_HEIGHT - dynamicHeight) + dynamicHeight / 2,
+              w: dynamicWidth,
+              h: dynamicHeight,
+              type: chosenType,
+            });
+          }
         }
 
         // Star powerup spawning checks
@@ -682,7 +872,7 @@ export default function CosmicField({
             s.miniRocketsEndTime = Date.now() + 7500; // 7.5 seconds
             s.powerUpStars.splice(i, 1);
             
-            const pointsEarned = Math.round(80 * (1 + (stats.radarAntennaLevel || 0) * 0.15));
+            const pointsEarned = Math.round(80 * (1 + (stats.radarAntennaLevel || 0) * 0.15) * config.multiplier);
             s.score += pointsEarned;
             playSound('star');
             onAddNotification(`+${pointsEarned} БАЛІВ! ЗОЛОТИЙ ДРОН АКТИВОВАНИЙ!`, 'powerup');
@@ -699,171 +889,418 @@ export default function CosmicField({
         // ---------------- BOSS ENGAGEMENTS ----------------
         if (!s.isBossActive && s.score >= s.nextBossSpawnScore) {
           s.isBossActive = true;
-          // Set dynamic next spawn threshold that is strictly greater than the current score!
-          s.nextBossSpawnScore = Math.floor(s.score / 1000) * 1000 + 1000;
+          // Set dynamic next spawn threshold that is strictly greater than the current score with a 3000 point interval!
+          s.nextBossSpawnScore = Math.floor(s.score / 3000) * 3000 + 3000;
           s.screenShakeActive = true;
           s.screenShakeEndTime = Date.now() + 7000; // Drone shakes
           playSound('bossSpawn');
-          onAddNotification('⚠️ НЕЗДОЛАННИЙ ЛІДЕР СЕКТОРА НАБЛИЖАЄТЬСЯ!', 'boss');
+          onAddNotification('⚠️ ОКУПАЦІЙНЕ КОМАНДУВАННЯ РФ НАБЛИЖАЄТЬСЯ!', 'boss');
 
-          s.boss = {
-            x: BASE_WIDTH - 150,
-            y: BASE_HEIGHT / 2,
-            w: 120,
-            h: 190,
-            health: 22 + s.bossesSlayed * 6,
-            maxHealth: 22 + s.bossesSlayed * 6,
-            dir: 1,
-            shootTimer: 0,
-            speed: 2.2,
-          };
+          const bossTypes: Array<'commander' | 'tank' | 'air_defense'> = ['commander', 'tank', 'air_defense'];
+          s.bosses = [];
+
+          // Spawns 2 bosses at once on High/Hard difficulty!
+          const spawnCount = difficulty === 'hard' ? 2 : 1;
+
+          for (let bIdx = 0; bIdx < spawnCount; bIdx++) {
+            const bType = bossTypes[Math.floor(Math.random() * bossTypes.length)];
+            let name = 'Окупаційний Офіцер';
+            let w = 120;
+            let h = 190;
+            // HP with a 40% globally mandated increase
+            let baseHp = Math.round((22 + s.bossesSlayed * 6) * 1.4);
+            let speed = 2.2;
+            let xOffset = bIdx * 85;
+
+            if (bType === 'commander') {
+              name = 'Генерал-Полковник Окупантів';
+              w = 120;
+              h = 190;
+              speed = 2.2;
+            } else if (bType === 'tank') {
+              name = 'Важкий Танк Т-90М «Прорив» РФ';
+              w = 150;
+              h = 140;
+              baseHp = Math.round(baseHp * 1.35); // 1.35x armored multiplier
+              speed = 1.25;
+            } else if (bType === 'air_defense') {
+              name = 'Комплекс ППО «Панцир-С1» РФ';
+              w = 110;
+              h = 130;
+              baseHp = Math.round(baseHp * 0.9); // 0.9x lighter multiplier but higher rate of fire
+              speed = 2.7;
+            }
+
+            s.bosses.push({
+              id: `${bType}_${Date.now()}_${bIdx}`,
+              type: bType,
+              name,
+              x: BASE_WIDTH - 150 - xOffset,
+              y: spawnCount === 2 ? (bIdx === 0 ? BASE_HEIGHT * 0.28 : BASE_HEIGHT * 0.72) : BASE_HEIGHT / 2,
+              w,
+              h,
+              health: baseHp,
+              maxHealth: baseHp,
+              dir: bIdx === 1 ? -1 : 1,
+              shootTimer: Math.floor(Math.random() * 35),
+              speed,
+            });
+          }
         }
 
-        if (s.isBossActive && s.boss) {
-          const b = s.boss;
-          // Hover movement mechanics
-          b.y += b.speed * b.dir;
-          if (b.y > BASE_HEIGHT - 130 || b.y < 130) {
-            b.dir *= -1;
-          }
+        if (s.isBossActive && s.bosses && s.bosses.length > 0) {
+          for (let bIdx = s.bosses.length - 1; bIdx >= 0; bIdx--) {
+            const b = s.bosses[bIdx];
 
-          // Shoots projectile
-          b.shootTimer++;
-          const bossLimit = Math.max(90, 160 - s.bossesSlayed * 15);
-          if (b.shootTimer >= bossLimit) {
-            b.shootTimer = 0;
-            s.bossProjectiles.push({
-              x: b.x - 45,
-              y: b.y,
-              r: 12,
-              speed: 7.2,
-            });
-            playSound('shoot');
-          }
-
-          // Render Boss
-          ctx.save();
-          // Draw simple health bar
-          const hbW = 140 * flexScale;
-          const hbH = 7 * flexScale;
-          const hbX = (b.x - 70) * flexScale;
-          const hbY = (b.y - b.h / 2 - 25) * flexScale;
-          ctx.fillStyle = '#333333';
-          ctx.fillRect(hbX, hbY, hbW, hbH);
-          const ratio = b.health / b.maxHealth;
-          ctx.fillStyle = ratio > 0.55 ? '#10B981' : ratio > 0.25 ? '#F59E0B' : '#EF4444';
-          ctx.fillRect(hbX, hbY, hbW * ratio, hbH);
-          ctx.strokeStyle = '#FFFFFF';
-          ctx.lineWidth = 0.5 * flexScale;
-          ctx.strokeRect(hbX, hbY, hbW, hbH);
-
-          // Head (Helmet)
-          ctx.fillStyle = '#556B2F'; // Uniform green
-          ctx.beginPath();
-          ctx.arc(b.x * flexScale, (b.y - 60) * flexScale, 24 * flexScale, 0, Math.PI * 2);
-          ctx.fill();
-
-          // Star badge on helmet
-          ctx.fillStyle = '#EF4444';
-          ctx.beginPath();
-          const starSz = 8;
-          const hY = b.y - 60;
-          for (let k = 0; k < 5; k++) {
-            ctx.lineTo(
-              (b.x + starSz * Math.cos(((18 + k * 72 - 90) * Math.PI) / 180)) * flexScale,
-              (hY + starSz * Math.sin(((18 + k * 72 - 90) * Math.PI) / 180)) * flexScale
-            );
-          }
-          ctx.closePath();
-          ctx.fill();
-
-          // Body
-          ctx.fillStyle = '#3F4E2E';
-          ctx.fillRect(
-            (b.x - 40) * flexScale,
-            (b.y - 36) * flexScale,
-            80 * flexScale,
-            85 * flexScale
-          );
-
-          // Arm/Rifle
-          ctx.fillStyle = '#111111';
-          ctx.fillRect(
-            (b.x - 75) * flexScale,
-            (b.y - 10) * flexScale,
-            70 * flexScale,
-            12 * flexScale
-          );
-
-          // Legs/Trousers
-          ctx.fillStyle = '#2F3C22';
-          ctx.fillRect(
-            (b.x - 30) * flexScale,
-            (b.y + 49) * flexScale,
-            24 * flexScale,
-            42 * flexScale
-          );
-          ctx.fillRect(
-            (b.x + 6) * flexScale,
-            (b.y + 49) * flexScale,
-            24 * flexScale,
-            42 * flexScale
-          );
-
-          ctx.restore();
-
-          // Collision check: player bullets hit Boss
-          for (let i = s.projectiles.length - 1; i >= 0; i--) {
-            if (!s.boss) break;
-            const p = s.projectiles[i];
-            const bossL = b.x - 40;
-            const bossR = b.x + 40;
-            const bossT = b.y - b.h / 2;
-            const bossB = b.y + b.h / 2;
-
-            if (p.x > bossL && p.x < bossR && p.y > bossT && p.y < bossB) {
-              // Plated damage!
-              b.health -= p.damage;
-              s.projectiles.splice(i, 1);
-              
-              const hitPoints = Math.round(20 * (1 + (stats.radarAntennaLevel || 0) * 0.15));
-              s.score += hitPoints;
-              // Spark effects
-              for (let k = 0; k < 6; k++) {
-                s.particles.push(new Particle(p.x, p.y, '#F59E0B'));
-              }
-              playSound('bossHit');
-
-              // Defeated!
-              if (b.health <= 0) {
-                const killPoints = Math.round(100 * (1 + (stats.radarAntennaLevel || 0) * 0.15));
-                s.score += killPoints;
-                s.bossesSlayed++;
-                playSound('explosion');
-
-                // Major debris splash
-                for (let k = 0; k < 35; k++) {
-                  s.particles.push(new Particle(b.x, b.y, '#FFFF00'));
-                  s.particles.push(new Particle(b.x, b.y, '#FF4500'));
-                }
-
-                s.isBossActive = false;
-                s.boss = null;
-                onAddNotification(`🏆 ПЕРЕМОГА НАД БОСОМ! +${killPoints} балів зафіксовано`, 'achievement');
-                s.screenShakeActive = true;
-                s.screenShakeEndTime = Date.now() + 600;
-              }
-              break;
+            // Hover movement mechanics
+            b.y += b.speed * b.dir;
+            if (b.y > BASE_HEIGHT - b.h / 2 - 35 || b.y < b.h / 2 + 35) {
+              b.dir *= -1;
             }
-          }
 
-          // Collision check: player collides with boss directly
-          const bLeft = b.x - 45;
-          const bRight = b.x + 45;
-          const bTop = b.y - b.h / 2;
-          const bBottom = b.y + b.h/2;
-          if (180 + 30 > bLeft && 180 - 30 < bRight && s.rocketY + 16 > bTop && s.rocketY - 16 < bBottom) {
-             handlePlayerDeath();
+            // Shoots projectile
+            b.shootTimer++;
+            const bossLimit = Math.max(80, 160 - s.bossesSlayed * 15);
+            if (b.shootTimer >= bossLimit) {
+              b.shootTimer = 0;
+              
+              if (b.type === 'tank') {
+                // Heavy slow blaster shell with larger radius, dealing massive damage
+                s.bossProjectiles.push({
+                  x: b.x - 55,
+                  y: b.y,
+                  r: 19,
+                  speed: 5.6,
+                  isHeavy: true,
+                });
+                playSound('shoot');
+              } else if (b.type === 'air_defense') {
+                // Sector defense spawns rapid dual bursts!
+                s.bossProjectiles.push({
+                  x: b.x - 45,
+                  y: b.y - 14,
+                  r: 8,
+                  speed: 8.5,
+                });
+                s.bossProjectiles.push({
+                  x: b.x - 45,
+                  y: b.y + 14,
+                  r: 8,
+                  speed: 8.5,
+                });
+                playSound('shoot');
+              } else {
+                // Commander
+                s.bossProjectiles.push({
+                  x: b.x - 45,
+                  y: b.y,
+                  r: 12,
+                  speed: 7.2,
+                });
+                playSound('shoot');
+              }
+            }
+
+            // Render Boss
+            ctx.save();
+            // Draw simple health bar
+            const hbW = 140 * flexScale;
+            const hbH = 7 * flexScale;
+            const hbX = (b.x - 70) * flexScale;
+            const hbY = (b.y - b.h / 2 - 25) * flexScale;
+            ctx.fillStyle = '#333333';
+            ctx.fillRect(hbX, hbY, hbW, hbH);
+            const ratio = Math.max(0, b.health / b.maxHealth);
+            ctx.fillStyle = ratio > 0.55 ? '#10B981' : ratio > 0.25 ? '#F59E0B' : '#EF4444';
+            ctx.fillRect(hbX, hbY, hbW * ratio, hbH);
+            ctx.strokeStyle = '#FFFFFF';
+            ctx.lineWidth = 0.5 * flexScale;
+            ctx.strokeRect(hbX, hbY, hbW, hbH);
+
+            // Print boss name over health bar
+            ctx.fillStyle = '#E2E8F0';
+            ctx.font = `bold ${9 * flexScale}px monospace`;
+            ctx.textAlign = 'center';
+            ctx.fillText(b.name.toUpperCase(), b.x * flexScale, hbY - 4 * flexScale);
+
+            if (b.type === 'commander') {
+              // Head (Helmet)
+              ctx.fillStyle = '#556B2F'; // Uniform green
+              ctx.beginPath();
+              ctx.arc(b.x * flexScale, (b.y - 60) * flexScale, 24 * flexScale, 0, Math.PI * 2);
+              ctx.fill();
+
+              // Red Star on military cap/helmet
+              ctx.fillStyle = '#EF4444';
+              ctx.beginPath();
+              const starSz = 8;
+              const hY = b.y - 60;
+              for (let k = 0; k < 5; k++) {
+                ctx.lineTo(
+                  (b.x + starSz * Math.cos(((18 + k * 72 - 90) * Math.PI) / 180)) * flexScale,
+                  (hY + starSz * Math.sin(((18 + k * 72 - 90) * Math.PI) / 180)) * flexScale
+                );
+              }
+              ctx.closePath();
+              ctx.fill();
+
+              // Body (Military tunic)
+              ctx.fillStyle = '#3F4E2E';
+              ctx.fillRect(
+                (b.x - 40) * flexScale,
+                (b.y - 36) * flexScale,
+                80 * flexScale,
+                85 * flexScale
+              );
+
+              // Red Russian shoulder boards / epaulets
+              ctx.fillStyle = '#D97706'; // Gold/orange trim
+              ctx.fillRect((b.x - 42) * flexScale, (b.y - 36) * flexScale, 18 * flexScale, 6 * flexScale);
+              ctx.fillRect((b.x + 24) * flexScale, (b.y - 36) * flexScale, 18 * flexScale, 6 * flexScale);
+
+              // Drawing a white "Z" symbol painted on the officer's uniform chest
+              ctx.strokeStyle = '#FFFFFF';
+              ctx.lineWidth = 4 * flexScale;
+              ctx.beginPath();
+              ctx.moveTo((b.x - 14) * flexScale, (b.y - 12) * flexScale);
+              ctx.lineTo((b.x + 14) * flexScale, (b.y - 12) * flexScale);
+              ctx.lineTo((b.x - 14) * flexScale, (b.y + 12) * flexScale);
+              ctx.lineTo((b.x + 14) * flexScale, (b.y + 12) * flexScale);
+              ctx.stroke();
+
+              // Russian tricolor patch on left arm sleeve
+              const patchX = (b.x + 30) * flexScale;
+              const patchY = (b.y - 15) * flexScale;
+              const patchW = 12 * flexScale;
+              const patchH = 10 * flexScale;
+              ctx.fillStyle = '#FFFFFF';
+              ctx.fillRect(patchX, patchY, patchW, patchH / 3);
+              ctx.fillStyle = '#011F82';
+              ctx.fillRect(patchX, patchY + patchH / 3, patchW, patchH / 3);
+              ctx.fillStyle = '#C20404';
+              ctx.fillRect(patchX, patchY + (patchH * 2) / 3, patchW, patchH / 3);
+
+              // Arm/Rifle
+              ctx.fillStyle = '#111111';
+              ctx.fillRect(
+                (b.x - 75) * flexScale,
+                (b.y - 10) * flexScale,
+                70 * flexScale,
+                12 * flexScale
+              );
+
+              // Legs/Trousers
+              ctx.fillStyle = '#2F3C22';
+              ctx.fillRect(
+                (b.x - 30) * flexScale,
+                (b.y + 49) * flexScale,
+                24 * flexScale,
+                42 * flexScale
+              );
+              ctx.fillRect(
+                (b.x + 6) * flexScale,
+                (b.y + 49) * flexScale,
+                24 * flexScale,
+                42 * flexScale
+              );
+            } else if (b.type === 'tank') {
+              // Russian Military Green Camouflage Chassis
+              ctx.fillStyle = '#3A4B29';
+              ctx.fillRect(
+                (b.x - 65) * flexScale,
+                (b.y - 50) * flexScale,
+                130 * flexScale,
+                100 * flexScale
+              );
+
+              // Forest camo organic blotches
+              ctx.fillStyle = '#1D2A11';
+              ctx.beginPath();
+              ctx.arc((b.x + 25) * flexScale, (b.y - 25) * flexScale, 20 * flexScale, 0, Math.PI * 2);
+              ctx.fill();
+              ctx.beginPath();
+              ctx.arc((b.x - 35) * flexScale, (b.y + 15) * flexScale, 18 * flexScale, 0, Math.PI * 2);
+              ctx.fill();
+
+              // Mud brown spots
+              ctx.fillStyle = '#5A4625';
+              ctx.beginPath();
+              ctx.arc((b.x - 20) * flexScale, (b.y - 20) * flexScale, 14 * flexScale, 0, Math.PI * 2);
+              ctx.fill();
+
+              // Big white "Z" occupant decal painted on armor plate side face
+              ctx.strokeStyle = '#FFFFFF';
+              ctx.lineWidth = 5.5 * flexScale;
+              ctx.beginPath();
+              ctx.moveTo((b.x - 25) * flexScale, (b.y - 25) * flexScale);
+              ctx.lineTo((b.x + 15) * flexScale, (b.y - 25) * flexScale);
+              ctx.lineTo((b.x - 25) * flexScale, (b.y + 15) * flexScale);
+              ctx.lineTo((b.x + 15) * flexScale, (b.y + 15) * flexScale);
+              ctx.stroke();
+
+              // Red star insignias on the front hazard warning side panels
+              ctx.fillStyle = '#EF4444';
+              ctx.fillRect((b.x - 65) * flexScale, (b.y - 50) * flexScale, 15 * flexScale, 100 * flexScale);
+              ctx.fillRect((b.x + 50) * flexScale, (b.y - 50) * flexScale, 15 * flexScale, 100 * flexScale);
+
+              // White Z icon on left warning panel
+              ctx.fillStyle = '#FFFFFF';
+              ctx.font = `bold ${10 * flexScale}px sans-serif`;
+              ctx.textAlign = 'center';
+              ctx.fillText('Z', (b.x - 57) * flexScale, b.y * flexScale);
+              ctx.fillText('Z', (b.x + 58) * flexScale, b.y * flexScale);
+
+              // Russian tricolor ribbon decal on top hull plate
+              const rX = (b.x - 45) * flexScale;
+              const rY = (b.y - 45) * flexScale;
+              const rW = 35 * flexScale;
+              const rH = 8 * flexScale;
+              ctx.fillStyle = '#FFFFFF';
+              ctx.fillRect(rX, rY, rW, rH / 3);
+              ctx.fillStyle = '#011F82';
+              ctx.fillRect(rX, rY + rH / 3, rW, rH / 3);
+              ctx.fillStyle = '#C20404';
+              ctx.fillRect(rX, rY + (rH * 2) / 3, rW, rH / 3);
+
+              // Armor plate steel borders
+              ctx.strokeStyle = '#223014';
+              ctx.lineWidth = 1 * flexScale;
+              ctx.strokeRect((b.x - 50) * flexScale, (b.y - 40) * flexScale, 100 * flexScale, 80 * flexScale);
+
+              // Large heavy dual blasters
+              ctx.fillStyle = '#151C0F';
+              ctx.fillRect((b.x - 92) * flexScale, (b.y - 20) * flexScale, 68 * flexScale, 15 * flexScale);
+              ctx.fillRect((b.x - 92) * flexScale, (b.y + 5) * flexScale, 68 * flexScale, 15 * flexScale);
+
+              // Power core light (glowing red central shield generator typical for soviet designs)
+              ctx.fillStyle = '#EF4444';
+              ctx.beginPath();
+              ctx.arc(b.x * flexScale, b.y * flexScale, 16 * flexScale, 0, Math.PI * 2);
+              ctx.fill();
+            } else if (b.type === 'air_defense') {
+              // Military AA pedestal base (dark green camouflage)
+              ctx.fillStyle = '#1A3323';
+              ctx.beginPath();
+              ctx.moveTo((b.x - 45) * flexScale, (b.y + 45) * flexScale);
+              ctx.lineTo((b.x + 45) * flexScale, (b.y + 45) * flexScale);
+              ctx.lineTo((b.x + 30) * flexScale, (b.y - 45) * flexScale);
+              ctx.lineTo((b.x - 30) * flexScale, (b.y - 45) * flexScale);
+              ctx.closePath();
+              ctx.fill();
+
+              // Radar detector display (Cyan line detail)
+              ctx.fillStyle = '#06B6D4';
+              ctx.fillRect((b.x - 22) * flexScale, (b.y - 25) * flexScale, 44 * flexScale, 6 * flexScale);
+
+              // Four Camo Rocket pod arrays (Left and Right pairs)
+              ctx.fillStyle = '#134E24';
+              ctx.fillRect((b.x - 55) * flexScale, (b.y - 40) * flexScale, 20 * flexScale, 25 * flexScale);
+              ctx.fillRect((b.x + 35) * flexScale, (b.y - 40) * flexScale, 20 * flexScale, 25 * flexScale);
+              ctx.fillRect((b.x - 55) * flexScale, (b.y + 15) * flexScale, 20 * flexScale, 25 * flexScale);
+              ctx.fillRect((b.x + 35) * flexScale, (b.y + 15) * flexScale, 20 * flexScale, 25 * flexScale);
+
+              // Draw white 'V' decals on military missile launch arrays
+              ctx.strokeStyle = '#FFFFFF';
+              ctx.lineWidth = 3 * flexScale;
+              // Left pods V decal
+              ctx.beginPath();
+              ctx.moveTo((b.x - 50) * flexScale, (b.y - 35) * flexScale);
+              ctx.lineTo((b.x - 45) * flexScale, (b.y - 20) * flexScale);
+              ctx.lineTo((b.x - 40) * flexScale, (b.y - 35) * flexScale);
+              ctx.stroke();
+
+              // Right pods V decal
+              ctx.beginPath();
+              ctx.moveTo((b.x + 40) * flexScale, (b.y - 35) * flexScale);
+              ctx.lineTo((b.x + 45) * flexScale, (b.y - 20) * flexScale);
+              ctx.lineTo((b.x + 50) * flexScale, (b.y - 35) * flexScale);
+              ctx.stroke();
+
+              // Tricolor stripe ribbon across the defense pedestal base
+              const ribbonX = (b.x - 22) * flexScale;
+              const ribbonY = (b.y + 20) * flexScale;
+              const ribbonW = 44 * flexScale;
+              const ribbonH = 8 * flexScale;
+              ctx.fillStyle = '#FFFFFF';
+              ctx.fillRect(ribbonX, ribbonY, ribbonW, ribbonH / 3);
+              ctx.fillStyle = '#011F82';
+              ctx.fillRect(ribbonX, ribbonY + ribbonH / 3, ribbonW, ribbonH / 3);
+              ctx.fillStyle = '#C20404';
+              ctx.fillRect(ribbonX, ribbonY + (ribbonH * 2) / 3, ribbonW, ribbonH / 3);
+
+              // Cyber-tracking sensor eye ball
+              ctx.fillStyle = '#0891B2';
+              ctx.beginPath();
+              ctx.arc(b.x * flexScale, b.y * flexScale, 20 * flexScale, 0, Math.PI * 2);
+              ctx.fill();
+              
+              // Secondary highlight
+              ctx.fillStyle = '#FFFFFF';
+              ctx.beginPath();
+              ctx.arc((b.x - 5) * flexScale, (b.y - 5) * flexScale, 6 * flexScale, 0, Math.PI * 2);
+              ctx.fill();
+            }
+
+            ctx.restore();
+
+            // Collision check: player bullets hit Boss
+            for (let i = s.projectiles.length - 1; i >= 0; i--) {
+              const p = s.projectiles[i];
+              const bossL = b.x - b.w / 2;
+              const bossR = b.x + b.w / 2;
+              const bossT = b.y - b.h / 2;
+              const bossB = b.y + b.h / 2;
+
+              if (p.x > bossL && p.x < bossR && p.y > bossT && p.y < bossB) {
+                // Plated damage!
+                b.health -= p.damage;
+                s.projectiles.splice(i, 1);
+                
+                const hitPoints = Math.round(20 * (1 + (stats.radarAntennaLevel || 0) * 0.15) * config.multiplier);
+                s.score += hitPoints;
+                // Spark effects
+                for (let k = 0; k < 6; k++) {
+                  s.particles.push(new Particle(p.x, p.y, '#F59E0B'));
+                }
+                playSound('bossHit');
+
+                // Defeated!
+                if (b.health <= 0) {
+                  const killPoints = Math.round(150 * (1 + (stats.radarAntennaLevel || 0) * 0.15) * config.multiplier);
+                  s.score += killPoints;
+                  s.bossesSlayed++;
+                  playSound('explosion');
+
+                  // Major debris splash
+                  for (let k = 0; k < 35; k++) {
+                    s.particles.push(new Particle(b.x, b.y, '#FFFF00'));
+                    s.particles.push(new Particle(b.x, b.y, '#FF4500'));
+                  }
+
+                  onAddNotification(`🏆 ПЕРЕМОГА: ЗНИЩЕНО "${b.name.toUpperCase()}"! +${killPoints} балів зафіксовано`, 'achievement');
+                  
+                  // Delete dead boss
+                  s.bosses.splice(bIdx, 1);
+
+                  // Update boss mode active when all bosses are fully dead!
+                  if (s.bosses.length === 0) {
+                    s.isBossActive = false;
+                    s.screenShakeActive = true;
+                    s.screenShakeEndTime = Date.now() + 600;
+                  }
+                }
+                break;
+              }
+            }
+
+            // Collision check: player collides with boss directly
+            const bLeft = b.x - b.w / 2 - 5;
+            const bRight = b.x + b.w / 2 + 5;
+            const bTop = b.y - b.h / 2 - 5;
+            const bBottom = b.y + b.h / 2 + 5;
+            if (180 + 30 > bLeft && 180 - 30 < bRight && s.rocketY + 16 > bTop && s.rocketY - 16 < bBottom) {
+               handlePlayerDeath();
+            }
           }
         }
 
@@ -873,18 +1310,44 @@ export default function CosmicField({
           bp.x -= bp.speed;
 
           // Render boss bullets
-          ctx.fillStyle = '#EF4444';
-          ctx.beginPath();
-          ctx.arc(bp.x * flexScale, bp.y * flexScale, bp.r * flexScale, 0, Math.PI * 2);
-          ctx.fill();
+          ctx.save();
+          if (bp.isHeavy) {
+            // Draw heavy fire charge with rotating safety line
+            ctx.fillStyle = '#EF4444';
+            ctx.shadowColor = '#FF0000';
+            ctx.shadowBlur = 12 * flexScale;
+            ctx.beginPath();
+            ctx.arc(bp.x * flexScale, bp.y * flexScale, bp.r * flexScale, 0, Math.PI * 2);
+            ctx.fill();
+            
+            // Core
+            ctx.fillStyle = '#FFFFFF';
+            ctx.beginPath();
+            ctx.arc(bp.x * flexScale, bp.y * flexScale, (bp.r / 2) * flexScale, 0, Math.PI * 2);
+            ctx.fill();
+          } else {
+            // Standard red plasma bullet with glowing core
+            ctx.fillStyle = '#EF4444';
+            ctx.beginPath();
+            ctx.arc(bp.x * flexScale, bp.y * flexScale, bp.r * flexScale, 0, Math.PI * 2);
+            ctx.fill();
+            
+            // Add yellow core
+            ctx.fillStyle = '#FBBF24';
+            ctx.beginPath();
+            ctx.arc(bp.x * flexScale, bp.y * flexScale, (bp.r * 0.45) * flexScale, 0, Math.PI * 2);
+            ctx.fill();
+          }
+          ctx.restore();
 
           // Check hit
           const dx = bp.x - 180;
           const dy = bp.y - s.rocketY;
           const dist = Math.sqrt(dx * dx + dy * dy);
           if (dist < bp.r + 20) {
+            s.bossProjectiles.splice(i, 1);
             handlePlayerDeath();
-            break;
+            continue;
           }
 
           if (bp.x < -20) {
@@ -1087,6 +1550,7 @@ export default function CosmicField({
           ctx.restore();
 
           // Bullet hits Kremlin checks
+          let kremlinDestroyed = false;
           for (let j = s.projectiles.length - 1; j >= 0; j--) {
             const p = s.projectiles[j];
             const kL = k.x - k.w / 2;
@@ -1099,7 +1563,7 @@ export default function CosmicField({
               s.kremlins.splice(i, 1);
               s.kremlinsSlayed++;
               
-              const pointsEarned = Math.round(15 * (1 + (stats.radarAntennaLevel || 0) * 0.15));
+              const pointsEarned = Math.round(15 * (1 + (stats.radarAntennaLevel || 0) * 0.15) * config.multiplier);
               s.score += pointsEarned;
 
               // Debris splatter particles
@@ -1115,8 +1579,13 @@ export default function CosmicField({
                 s.currentSeasonIdx = nextSeasonIdx;
                 onAddNotification(`СЕКТОР ЗАЧИЩЕНО! ЛАСКАВО ПРОСИМО ДО СЕКТОРА "${SEASONS[nextSeasonIdx].name}"`, 'season');
               }
+              kremlinDestroyed = true;
               break;
             }
+          }
+
+          if (kremlinDestroyed) {
+            continue; // Avoid player crash check and duplicate clean off-screen splice for this already-spliced kremlin!
           }
 
           // Player hits Kremlin check (Deadwards!)
@@ -1163,6 +1632,7 @@ export default function CosmicField({
         ctx.closePath();
         ctx.fill();
         ctx.shadowBlur = 0;
+        ctx.restore(); // Balance the exhaust flame ctx.save()
 
         // Draw Main ship chassis hull
         ctx.fillStyle = skinRef.current.bodyColor;
@@ -1210,6 +1680,21 @@ export default function CosmicField({
       }
 
       ctx.restore();
+
+      // Synchronize in-game DOM HUD details without taxing React reconciliation tree at 60fps
+      const scoreDom = document.getElementById('hud-score-val');
+      if (scoreDom) scoreDom.textContent = String(s.score);
+      const seasonDom = document.getElementById('hud-season-val');
+      if (seasonDom) seasonDom.textContent = SEASONS[s.currentSeasonIdx].name;
+      const shieldDom = document.getElementById('hud-shield-val');
+      if (shieldDom) {
+        shieldDom.textContent = `${s.shieldChargesLeft} / ${s.maxShieldCharges}`;
+      }
+
+      // Force virtual controls to redraw cooldown countdowns gracefully at ~6fps
+      if ((s.isAccelerating || Date.now() < s.boostCooldownEndTime) && s.gameTime % 10 === 0) {
+        setBoostCooldownTick((prev) => prev + 1);
+      }
 
       // Standardize game loops
       if (s.gameState === 'playing' || s.gameState === 'paused') {
@@ -1259,7 +1744,7 @@ export default function CosmicField({
       cancelAnimationFrame(animId);
       window.removeEventListener('resize', handleResize);
     };
-  }, [gameState, soundEnabled, setGameState, isTheaterMode]);
+  }, [gameState, soundEnabled, setGameState, isTheaterMode, difficulty]);
 
   // Restart trigger
   const handleRestart = () => {
@@ -1270,8 +1755,8 @@ export default function CosmicField({
     s.kremlinsSlayed = 0;
     s.boostsPerformed = 0;
     s.isBossActive = false;
-    s.boss = null;
-    s.nextBossSpawnScore = 1000;
+    s.bosses = [];
+    s.nextBossSpawnScore = 3000;
     s.maxShieldCharges = stats.shieldCoreLevel || 0;
     s.shieldChargesLeft = stats.shieldCoreLevel || 0;
     s.boostDuration = 6000 + (stats.thrustCoreLevel || 0) * 1500;
@@ -1285,6 +1770,15 @@ export default function CosmicField({
     s.isAccelerating = false;
     s.rocketBaseY = BASE_HEIGHT / 2;
     s.startTimeMs = Date.now();
+
+    // Wave resets
+    s.waveTimer = 0;
+    s.waveActive = false;
+    s.waveSpawnCount = 0;
+    s.waveSpawnMax = 0;
+    s.waveNextSpawnTimer = 0;
+    s.kremlinSpawnTimer = 0;
+
     setGameState('playing');
   };
 
@@ -1355,25 +1849,46 @@ export default function CosmicField({
           <div className="flex gap-4 bg-slate-955/85 border border-slate-800/80 px-4 py-2 rounded-xl backdrop-blur-sm shadow-md">
             <div>
               <p className="text-[10px] uppercase text-slate-400/80 tracking-wide font-extrabold font-sans">Бойові бали</p>
-              <p className="text-xl font-bold text-cyan-400">{stateRef.current.score}</p>
+              <p className="text-xl font-bold text-cyan-400" id="hud-score-val">{stateRef.current.score}</p>
             </div>
             <div className="border-l border-slate-800/80 pl-4">
               <p className="text-[10px] uppercase text-slate-400/80 tracking-wide font-extrabold font-sans">Сектор загрози</p>
-              <p className="text-sm font-bold text-slate-200 mt-1 uppercase">
+              <p className="text-sm font-bold text-slate-200 mt-1 uppercase" id="hud-season-val">
                 {SEASONS[stateRef.current.currentSeasonIdx].name}
               </p>
             </div>
             {stateRef.current.maxShieldCharges > 0 && (
               <div className="border-l border-slate-800/80 pl-4 flex flex-col justify-center">
                 <p className="text-[10px] uppercase text-slate-400/80 tracking-wide font-extrabold font-sans">Дефлектор</p>
-                <p className="text-sm font-bold text-emerald-400 mt-1 uppercase flex items-center gap-1.5">
+                <p className="text-sm font-bold text-emerald-400 mt-1 uppercase flex items-center gap-1.5 font-mono">
                   <span className="inline-block w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse" />
-                  {stateRef.current.shieldChargesLeft} / {stateRef.current.maxShieldCharges}
+                  <span id="hud-shield-val">{stateRef.current.shieldChargesLeft} / {stateRef.current.maxShieldCharges}</span>
                 </p>
               </div>
             )}
           </div>
         </div>
+      )}
+
+      {/* Persistent Mobile Gamepad Overlays (Always sit safely on top in both Theater/Fullscreen and standard viewports) */}
+      {gameState === 'playing' && (
+        <VirtualControls
+          onDirectionPress={(dir) => {
+            const verticalVelocity = BASE_HEIGHT * 0.013;
+            if (dir === 'up') {
+              stateRef.current.dyInput = -verticalVelocity;
+            } else if (dir === 'down') {
+              stateRef.current.dyInput = verticalVelocity;
+            } else {
+              stateRef.current.dyInput = 0;
+            }
+          }}
+          onShoot={triggerWeaponFire}
+          onBoost={triggerEngineBoost}
+          boostAvailable={true}
+          boostCooldowned={currentBoostCooldowned}
+          cooldownLeft={currentCooldownLeft}
+        />
       )}
 
       {/* Start screen layout overlay */}
@@ -1391,6 +1906,34 @@ export default function CosmicField({
             <p className="text-xs text-slate-400 leading-relaxed font-sans">
               Здійсніть виліт проти стародавніх кремлівських споруд у глибинах неонового космосу. Накопичуйте боєприпаси, викликайте орбітальних дронів та знищуйте ворожих лідерів сектора!
             </p>
+
+            {/* Difficulty selection section */}
+            <div className="w-full flex flex-col gap-2 my-1">
+              <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider font-mono text-left">
+                Рівень Складності:
+              </span>
+              <div className="grid grid-cols-3 gap-2 w-full">
+                {(['easy', 'medium', 'hard'] as const).map((d) => {
+                  const cfg = DIFFICULTY_CONFIGS[d];
+                  const isActive = difficulty === d;
+                  return (
+                    <button
+                      key={d}
+                      onClick={() => handleSelectDifficulty(d)}
+                      className={`text-xs font-semibold py-2 px-1 rounded-lg border transition-all cursor-pointer ${
+                        isActive
+                          ? cfg.activeColor
+                          : `${cfg.color} hover:border-slate-600`
+                      }`}
+                      id={`diff-select-${d}`}
+                    >
+                      <div className="font-extrabold text-[11px]">{cfg.label.split(' ')[0]}</div>
+                      <div className="text-[9px] opacity-80 mt-0.5">x{cfg.multiplier} очки</div>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
 
             <button
               onClick={() => setGameState('playing')}

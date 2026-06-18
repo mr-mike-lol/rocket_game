@@ -1,1 +1,22 @@
 @import "tailwindcss";
+
+/* 
+ * Responsive helper to show touch gamepad controls dynamically on small screens 
+ * and landscape viewports with small vertical heights.
+ */
+#mobile-touch-controller {
+  display: none !important;
+}
+
+@media (pointer: coarse) or (max-width: 1023px) or (max-height: 520px) {
+  #mobile-touch-controller {
+    display: flex !important;
+  }
+}
+
+/* Ensure default hidden state on full desktop screen sizes with active mice */
+@media (min-width: 1024px) and (min-height: 521px) {
+  #mobile-touch-controller {
+    display: none !important;
+  }
+}

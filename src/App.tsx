@@ -9,7 +9,6 @@ import Hangar from './components/Hangar';
 import Leaderboard from './components/Leaderboard';
 import StorePage from './components/StorePage';
 import NotificationToast from './components/NotificationToast';
-import VirtualControls from './components/VirtualControls';
 import { GameNotification, PlayerStats, LeaderboardEntry, DAILY_MISSIONS } from './types';
 import {
   loadPlayerStats,
@@ -342,16 +341,6 @@ export default function App() {
                 mobileShootTrigger={mobileShootCount}
                 mobileBoostTrigger={mobileBoostCount}
                 stats={stats}
-              />
-
-              {/* Mobile Gamepad Touch Action Overlays (strictly displayed on phone screen widths) */}
-              <VirtualControls
-                onDirectionPress={setMobilePress}
-                onShoot={() => setMobileShootCount((prev) => prev + 1)}
-                onBoost={() => setMobileBoostCount((prev) => prev + 1)}
-                boostAvailable={true}
-                boostCooldowned={false}
-                cooldownLeft={0}
               />
             </div>
 

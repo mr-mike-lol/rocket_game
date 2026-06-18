@@ -13,22 +13,64 @@ interface NotificationToastProps {
   onDismiss: (id: string) => void;
 }
 
+// Lightweight hidden timer to ensure notifications are automatically deleted from state on mobile sizes too
+function HiddenTracker({ notification, onDismiss }: { key?: string; notification: GameNotification; onDismiss: (id: string) => void }) {
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      onDismiss(notification.id);
+    }, 4500);
+    return () => clearTimeout(timer);
+  }, [notification.id, onDismiss]);
+  return null;
+}
+
 export default function NotificationToast({ notifications, onDismiss }: NotificationToastProps) {
+  const tickerText = notifications.length > 0
+    ? notifications.map((n) => `[${n.type.toUpperCase()}]: ${n.message}`).join('   ✦   ') + '               '
+    : '✦ БОРТОВИЙ СТАТУС: ПОЛІТ В НОРМІ ✦ СЕКТОР ЗАГРОЗИ ГОТОВИЙ ДО ЗАЧИСТКИ ✦ МАНЕВРУЙТЕ ТА ЗНИЩУЙТЕ ЦІЛІ ✦               ';
+
   return (
-    <div className="absolute top-4 left-4 z-40 flex flex-col gap-2 w-72 max-w-[calc(100vw-2rem)] pointer-events-none">
-      <AnimatePresence>
-        {notifications.map((notif) => {
-          // Duration auto-dismiss
-          return (
+    <>
+      {/* 1. MOBILE ONLY: News Ticker / Marquee Ribbon at the top of the mobile screen */}
+      <div className="fixed top-0 left-0 right-0 z-[100] sm:hidden bg-slate-950/95 border-b border-cyan-500/30 text-cyan-400 py-1.5 font-mono text-xs select-none flex items-center overflow-hidden backdrop-blur-md shadow-[0_2px_15px_rgba(34,211,238,0.15)] animate-fade-in">
+        <div className="px-3 py-0.5 bg-cyan-950/90 text-cyan-300 font-extrabold z-10 flex items-center border-r border-cyan-500/30 text-[9px] uppercase tracking-wider shrink-0 font-mono">
+          ЕФІР
+        </div>
+        <motion.div
+          key={tickerText} // Restarts animation smoothly on updates for optimal readability
+          initial={{ x: '100vw' }}
+          animate={{ x: '-100%' }}
+          transition={{
+            repeat: Infinity,
+            ease: 'linear',
+            duration: Math.max(12, tickerText.length * 0.12), // dynamic speed proportional to text length
+          }}
+          className="whitespace-nowrap pl-4 pr-12 text-[11px] leading-none"
+        >
+          {tickerText}
+        </motion.div>
+
+        {/* Quietly mount hidden trackers to recycle notification list timers */}
+        <div className="hidden">
+          {notifications.map((notif) => (
+            <HiddenTracker key={notif.id} notification={notif} onDismiss={onDismiss} />
+          ))}
+        </div>
+      </div>
+
+      {/* 2. PC / DESKTOP ONLY: Normal stack of beautiful dynamic side panel cards */}
+      <div className="hidden sm:flex absolute top-4 left-4 z-40 flex-col gap-2 w-72 max-w-[calc(100vw-2rem)] pointer-events-none">
+        <AnimatePresence>
+          {notifications.map((notif) => (
             <ToastItem
               key={notif.id}
               notification={notif}
               onDismiss={onDismiss}
             />
-          );
-        })}
-      </AnimatePresence>
-    </div>
+          ))}
+        </AnimatePresence>
+      </div>
+    </>
   );
 }
 
@@ -74,7 +116,7 @@ function ToastItem({ notification, onDismiss }: ToastItemProps) {
         };
       case 'boost':
         return {
-          bg: 'bg-cyan-950/90 border-cyan-500/70 text-cyan-150',
+          bg: 'bg-cyan-950/90 border-cyan-500/70 text-cyan-155',
           shadow: 'shadow-[0_0_15px_rgba(6,182,212,0.4)]',
           icon: <Flame className="w-5 h-5 text-cyan-400" />,
         };
