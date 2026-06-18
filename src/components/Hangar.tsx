@@ -4,18 +4,20 @@
  */
 
 import React from 'react';
-import { ROCKET_SKINS, RocketSkin, PlayerStats } from '../types';
+import { ROCKET_SKINS, RocketSkin, PlayerStats, COSMIC_WEAPONS } from '../types';
 import { motion } from 'motion/react';
 import { Lock, Check, Zap, Flame, Shield, Target } from 'lucide-react';
-import { isSkinUnlocked } from '../utils/cache';
+import { isSkinUnlocked, isWeaponUnlocked } from '../utils/cache';
 
 interface HangarProps {
   stats: PlayerStats;
   selectedSkinId: string;
+  selectedWeaponId: string;
   onSelectSkin: (id: string) => void;
+  onSelectWeapon: (id: string) => void;
 }
 
-export default function Hangar({ stats, selectedSkinId, onSelectSkin }: HangarProps) {
+export default function Hangar({ stats, selectedSkinId, selectedWeaponId, onSelectSkin, onSelectWeapon }: HangarProps) {
   return (
     <div className="w-full flex flex-col gap-6" id="hangar-panel">
       <div className="flex flex-col gap-2">
@@ -24,7 +26,7 @@ export default function Hangar({ stats, selectedSkinId, onSelectSkin }: HangarPr
           Ангар Кораблів
         </h2>
         <p className="text-sm text-slate-400">
-          Налаштуйте свій бойовий винищувач. Вищі рекорди та додаткові вильоти дають змогу розблокувати унікальні судна з потужною обшивкою та експериментальною зброєю.
+          Оберіть свій бойовий корабель. Кораблі винищувачі автоматично розблоковуються в космосі при досягненні необхідного рекорду (балів) за <strong className="text-amber-400">один окремий політ</strong>!
         </p>
       </div>
 
@@ -70,9 +72,9 @@ export default function Hangar({ stats, selectedSkinId, onSelectSkin }: HangarPr
 
                 <div className="flex flex-col items-end">
                   {!isUnlocked ? (
-                    <div className="flex items-center gap-1 text-xs text-amber-500 font-mono font-bold px-2 py-1 rounded bg-amber-950/40 border border-amber-500/30 whitespace-nowrap">
+                    <div className="flex items-center gap-1.5 text-xs text-amber-500 font-mono font-bold px-2 py-1.5 rounded bg-amber-950/40 border border-amber-500/30 whitespace-nowrap">
                       <Lock className="w-3.5 h-3.5 text-amber-500" />
-                      {skin.unlockScore} бал.
+                      Рекорд: {skin.unlockScore} бал.
                     </div>
                   ) : (
                     <span className="text-[10px] font-mono tracking-wider text-cyan-400 bg-cyan-950/60 px-2 py-0.5 rounded border border-cyan-500/20 font-semibold uppercase whitespace-nowrap">
@@ -162,6 +164,82 @@ export default function Hangar({ stats, selectedSkinId, onSelectSkin }: HangarPr
                       : 'x2.5 Тахіонний'}
                   </span>
                 </div>
+              </div>
+            </motion.div>
+          );
+        })}
+      </div>
+
+      {/* Weapons Selection Section */}
+      <div className="flex flex-col gap-2 mt-8">
+        <h2 className="text-xl font-bold font-sans text-emerald-400 flex items-center gap-2">
+          <Target className="w-5 h-5 text-emerald-400" />
+          Бортовий Арсенал Озброєння
+        </h2>
+        <p className="text-sm text-slate-400">
+          Оберіть модуль тактичного вогню для встановлення на корабель. Додаткові види зброї можна придбати в Лабораторії Магазину за кредити.
+        </p>
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        {COSMIC_WEAPONS.map((weapon) => {
+          const isUnlocked = isWeaponUnlocked(weapon.id, stats);
+          const isSelected = selectedWeaponId === weapon.id;
+
+          return (
+            <motion.div
+              key={weapon.id}
+              whileHover={{ y: isUnlocked ? -2 : 0 }}
+              onClick={() => isUnlocked && onSelectWeapon(weapon.id)}
+              className={`relative overflow-hidden p-4 rounded-xl border flex flex-col justify-between transition-all duration-300 ${
+                isSelected
+                  ? 'bg-emerald-950/20 border-emerald-500/80 shadow-[0_0_15px_rgba(16,185,129,0.12)]'
+                  : isUnlocked
+                  ? 'bg-slate-900/60 border-slate-700/60 hover:bg-slate-800/80 hover:border-slate-600 cursor-pointer'
+                  : 'bg-slate-950/80 border-slate-900 opacity-60'
+              }`}
+              id={`weapon-card-${weapon.id}`}
+            >
+              {isSelected && (
+                <div className="absolute top-0 right-0 w-24 h-24 bg-emerald-500/5 blur-xl pointer-events-none rounded-full" />
+              )}
+
+              <div className="flex items-start justify-between gap-2 mb-2">
+                <div className="flex flex-col">
+                  <span className="text-md font-bold font-sans tracking-wide text-slate-100 flex items-center gap-2">
+                    {weapon.name}
+                    {isSelected && (
+                      <span className="inline-flex items-center justify-center p-1 rounded-full bg-emerald-500 text-slate-950">
+                        <Check className="w-3 h-3 stroke-[3]" />
+                      </span>
+                    )}
+                  </span>
+                  <span className="text-xs text-slate-400 font-sans mt-0.5 leading-relaxed">
+                    {weapon.description}
+                  </span>
+                </div>
+
+                <div className="flex flex-col items-end">
+                  {!isUnlocked ? (
+                    <div className="flex items-center gap-1 text-[10px] text-amber-500 font-mono font-bold px-2 py-0.5 rounded bg-amber-950/40 border border-amber-500/30 whitespace-nowrap">
+                      <Lock className="w-3 h-3 text-amber-500" />
+                      Магазин ({weapon.price} кр.)
+                    </div>
+                  ) : (
+                    <span className="text-[10px] font-mono tracking-wider text-emerald-400 bg-emerald-950/60 px-2 py-0.5 rounded border border-emerald-500/20 font-semibold uppercase whitespace-nowrap">
+                      Придбано
+                    </span>
+                  )}
+                </div>
+              </div>
+
+              {/* Glowing color laser line */}
+              <div className="mt-2 py-2.5 px-4 h-10 bg-slate-950/50 rounded-lg flex items-center gap-3 border border-slate-800/65 font-mono text-[11px] text-slate-400">
+                <div className="w-16 h-1.5 rounded-full" style={{ backgroundColor: weapon.projectileColor, boxShadow: `0 0 8px ${weapon.projectileColor}` }} />
+                <span>Заряд:</span>
+                <span className="font-bold font-sans flex-1 text-right" style={{ color: weapon.projectileColor }}>
+                  {weapon.projectileColor.toUpperCase()}
+                </span>
               </div>
             </motion.div>
           );

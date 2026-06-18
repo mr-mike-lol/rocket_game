@@ -10,9 +10,10 @@ import Leaderboard from './components/Leaderboard';
 import StorePage from './components/StorePage';
 import NotificationToast from './components/NotificationToast';
 import VirtualControls from './components/VirtualControls';
-import { GameNotification, PlayerStats, LeaderboardEntry } from './types';
+import { GameNotification, PlayerStats, LeaderboardEntry, DAILY_MISSIONS } from './types';
 import {
   loadPlayerStats,
+  savePlayerStats,
   updateStats,
   loadLeaderboard,
   addLeaderboardEntry,
@@ -54,7 +55,33 @@ export default function App() {
 
   // Load all cache configurations on pilot sign-on
   useEffect(() => {
-    const loadedStats = loadPlayerStats();
+    let loadedStats = loadPlayerStats();
+    
+    // Auto-migrate selectedWeaponId and unlockedWeaponIds if needed
+    if (!loadedStats.selectedWeaponId) {
+      loadedStats.selectedWeaponId = 'laser_alpha';
+    }
+    if (!loadedStats.unlockedWeaponIds) {
+      loadedStats.unlockedWeaponIds = ['laser_alpha'];
+    }
+
+    // Daily Mission picker & rotation check
+    const todayStr = new Date().toISOString().split('T')[0];
+    if (loadedStats.dailyLastUpdated !== todayStr || !loadedStats.dailyMissionId) {
+      // Pick random daily mission
+      const randomIndex = Math.floor(Math.random() * DAILY_MISSIONS.length);
+      const chosenMission = DAILY_MISSIONS[randomIndex];
+      
+      loadedStats = {
+        ...loadedStats,
+        dailyMissionId: chosenMission.id,
+        dailyMissionProgress: 0,
+        dailyMissionClaimed: false,
+        dailyLastUpdated: todayStr,
+      };
+      savePlayerStats(loadedStats);
+    }
+
     setStats(loadedStats);
 
     const loadedLeaderboard = loadLeaderboard();
@@ -106,12 +133,26 @@ export default function App() {
   };
 
   // Callback on finishing match criteria
-  const handleGameFinished = (finalScore: number, bossesDefeated: number) => {
+  const handleGameFinished = (finalScore: number, bossesDefeated: number, kremlinsDestroyed: number = 0, boostsPerformed: number = 0) => {
     const currentHighScore = Math.max(stats.highScore, finalScore);
     
     // Earn 50% score as credits plus a clean 100 credits bonus per defeated boss!
     const creditsEarned = Math.floor(finalScore * 0.5) + (bossesDefeated * 100);
     
+    // In-game Daily Mission Progress updates
+    let updatedProgress = stats.dailyMissionProgress || 0;
+    if (stats.dailyMissionId === 'score_single') {
+      updatedProgress = Math.max(updatedProgress, finalScore);
+    } else if (stats.dailyMissionId === 'boss_single') {
+      updatedProgress = Math.max(updatedProgress, bossesDefeated);
+    } else if (stats.dailyMissionId === 'boosts') {
+      updatedProgress += boostsPerformed;
+    } else if (stats.dailyMissionId === 'score_cumulative') {
+      updatedProgress += finalScore;
+    } else if (stats.dailyMissionId === 'kremlin_kills') {
+      updatedProgress += kremlinsDestroyed;
+    }
+
     const updated = updateStats({
       highScore: currentHighScore,
       totalScore: stats.totalScore + finalScore,
@@ -120,6 +161,7 @@ export default function App() {
       powerUpsCollected: stats.powerUpsCollected + Math.floor(finalScore * 0.005), 
       projectilesFired: stats.projectilesFired + Math.floor(finalScore * 0.15), 
       credits: (stats.credits || 0) + creditsEarned,
+      dailyMissionProgress: updatedProgress,
     });
     setStats(updated);
 
@@ -139,6 +181,24 @@ export default function App() {
     const next = updateStats({ selectedSkinId: id });
     setStats(next);
     addNotification(`Ядро зоряного винищувача змінено на: ${id.toUpperCase()}`, 'info');
+  };
+
+  const handleSelectWeapon = (id: string) => {
+    const next = updateStats({ selectedWeaponId: id });
+    setStats(next);
+    addNotification(`Озброєння винищувача змінено на: ${id.toUpperCase()}`, 'info');
+  };
+
+  const handleClaimDailyReward = () => {
+    const activeMission = DAILY_MISSIONS.find((m) => m.id === stats.dailyMissionId);
+    if (!activeMission || stats.dailyMissionClaimed) return;
+
+    const nextStats = updateStats({
+      credits: (stats.credits || 0) + activeMission.reward,
+      dailyMissionClaimed: true,
+    });
+    setStats(nextStats);
+    addNotification(`🏆 ЩОДЕННУ МІСІЮ ВИКОНАНО! Отримано нагороду: +${activeMission.reward} кредитів`, 'achievement');
   };
 
   const handleUpdateStats = (updates: Partial<PlayerStats>) => {
@@ -300,6 +360,55 @@ export default function App() {
                 🕹️ Керування: <span className="text-cyan-400">Стрілки ВГОРУ/ВНИЗ</span> або <span className="text-cyan-400">W/S</span> для маневрування, <span className="text-cyan-400">ПРОБІЛ</span> для вогню, <span className="text-cyan-400">SHIFT</span> для запуску форсажу. 
               </div>
             )}
+
+            {/* Daily Mission Panel */}
+            {gameState !== 'playing' && stats.dailyMissionId && (
+              <div className="bg-slate-900/40 border border-slate-800/80 p-4 rounded-xl flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-4">
+                <div className="flex items-center gap-3">
+                  <div className={`p-2 rounded-lg border flex items-center justify-center h-10 w-10 ${
+                    stats.dailyMissionClaimed 
+                      ? 'bg-slate-950 border-slate-800 text-slate-600' 
+                      : (stats.dailyMissionProgress || 0) >= (DAILY_MISSIONS.find(m => m.id === stats.dailyMissionId)?.target || 1)
+                      ? 'bg-amber-400/10 border-amber-500/30 text-amber-400 animate-pulse'
+                      : 'bg-cyan-500/10 border-cyan-500/20 text-cyan-400'
+                  }`}>
+                    <Trophy className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <span className="text-[10px] font-mono font-bold text-slate-400 uppercase tracking-widest block mb-0.5">ЩОДЕННА МІСІЯ</span>
+                    <span className="text-xs font-bold text-slate-100 font-sans block">
+                      {DAILY_MISSIONS.find(m => m.id === stats.dailyMissionId)?.text}
+                    </span>
+                    <div className="text-xs text-slate-400 font-mono mt-1 flex items-center gap-2">
+                      <span>Прогрес:</span>
+                      <span className="text-cyan-400 font-extrabold">{Math.min(stats.dailyMissionProgress || 0, DAILY_MISSIONS.find(m => m.id === stats.dailyMissionId)?.target || 1)}</span>
+                      <span className="text-slate-600">/</span>
+                      <span className="text-slate-400 font-bold">{DAILY_MISSIONS.find(m => m.id === stats.dailyMissionId)?.target}</span>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="flex items-center">
+                  {stats.dailyMissionClaimed ? (
+                    <span className="text-[10px] font-mono font-bold text-slate-500 bg-slate-950 px-3 py-1.5 rounded-lg border border-slate-800/60 uppercase">
+                      ВИКОНАНО
+                    </span>
+                  ) : (stats.dailyMissionProgress || 0) >= (DAILY_MISSIONS.find(m => m.id === stats.dailyMissionId)?.target || 1) ? (
+                    <button
+                      onClick={handleClaimDailyReward}
+                      className="text-xs font-mono font-bold text-slate-950 bg-gradient-to-r from-amber-400 to-yellow-500 hover:from-amber-300 hover:to-yellow-400 px-4 py-2 rounded-lg transition shadow-lg cursor-pointer flex items-center gap-1.5"
+                    >
+                      <span>Забрати Нагороду</span>
+                      <span className="bg-slate-950 text-amber-400 font-black px-1.5 py-0.5 rounded leading-none text-[9px]">+{DAILY_MISSIONS.find(m => m.id === stats.dailyMissionId)?.reward} КР</span>
+                    </button>
+                  ) : (
+                    <span className="text-[10px] font-mono font-bold text-slate-400 bg-slate-950/60 px-3 py-1.5 rounded-lg border border-slate-800/80">
+                      У ПРОЦЕСІ...
+                    </span>
+                  )}
+                </div>
+              </div>
+            )}
           </div>
         )}
 
@@ -318,7 +427,9 @@ export default function App() {
             <Hangar
               stats={stats}
               selectedSkinId={stats.selectedSkinId}
+              selectedWeaponId={stats.selectedWeaponId || 'laser_alpha'}
               onSelectSkin={handleSelectSkin}
+              onSelectWeapon={handleSelectWeapon}
             />
           </div>
         )}

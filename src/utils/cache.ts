@@ -17,12 +17,14 @@ const DEFAULT_STATS: PlayerStats = {
   powerUpsCollected: 0,
   projectilesFired: 0,
   selectedSkinId: 'classic',
+  selectedWeaponId: 'laser_alpha',
   credits: 0,
   shieldCoreLevel: 0,
   thrustCoreLevel: 0,
   energyCoreLevel: 0,
   radarAntennaLevel: 0,
   unlockedSkinIds: ['classic'],
+  unlockedWeaponIds: ['laser_alpha'],
 };
 
 const SEED_LEADERBOARD: LeaderboardEntry[] = [
@@ -104,4 +106,9 @@ export function isSkinUnlocked(skinId: string, stats: PlayerStats): boolean {
   if (skinId === 'classic') return true;
   const inUnlockedList = stats.unlockedSkinIds && stats.unlockedSkinIds.includes(skinId);
   return stats.highScore >= skin.unlockScore || inUnlockedList;
+}
+
+export function isWeaponUnlocked(weaponId: string, stats: PlayerStats): boolean {
+  if (weaponId === 'laser_alpha') return true;
+  return !!(stats.unlockedWeaponIds && stats.unlockedWeaponIds.includes(weaponId));
 }

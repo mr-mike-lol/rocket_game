@@ -4,14 +4,14 @@
  */
 
 import React, { useEffect, useRef, useState } from 'react';
-import { PlayerStats, RocketSkin, ROCKET_SKINS, SEASONS } from '../types';
-import { Play, Pause, RotateCcw, Volume2, VolumeX, ShieldAlert, Zap } from 'lucide-react';
+import { PlayerStats, RocketSkin, ROCKET_SKINS, SEASONS, COSMIC_WEAPONS } from '../types';
+import { Play, Pause, RotateCcw, Volume2, VolumeX, ShieldAlert, Zap, Maximize, Minimize } from 'lucide-react';
 
 interface CosmicFieldProps {
   selectedSkinId: string;
   gameState: 'start' | 'playing' | 'paused' | 'gameOver';
   setGameState: (state: 'start' | 'playing' | 'paused' | 'gameOver') => void;
-  onGameFinished: (finalScore: number, bossesDefeated: number) => void;
+  onGameFinished: (finalScore: number, bossesDefeated: number, kremlinsDestroyed: number, boostsPerformed: number) => void;
   onAddNotification: (message: string, type: 'achievement' | 'boss' | 'powerup' | 'season' | 'boost' | 'info') => void;
   // External triggers for touch buttons
   mobileDirectPress: 'up' | 'down' | null;
@@ -76,6 +76,52 @@ export default function CosmicField({
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [isPlaying, setIsPlaying] = useState(false);
   const [soundEnabled, setSoundEnabled] = useState(true);
+  const [isTheaterMode, setIsTheaterMode] = useState(false);
+
+  // Sync state with HTML5 native fullscreen events
+  useEffect(() => {
+    const onFullscreenChange = () => {
+      const activeFullscreen = !!document.fullscreenElement;
+      setIsTheaterMode(activeFullscreen);
+    };
+    document.addEventListener('fullscreenchange', onFullscreenChange);
+    document.addEventListener('webkitfullscreenchange', onFullscreenChange);
+    return () => {
+      document.removeEventListener('fullscreenchange', onFullscreenChange);
+      document.removeEventListener('webkitfullscreenchange', onFullscreenChange);
+    };
+  }, []);
+
+  const handleToggleFullscreen = () => {
+    const element = containerRef.current;
+    if (!element) return;
+
+    if (!isTheaterMode) {
+      if (element.requestFullscreen) {
+        element.requestFullscreen().catch(() => {
+          // Fallback if sandboxed iframe denies request
+          setIsTheaterMode(true);
+        });
+      } else if ((element as any).webkitRequestFullscreen) {
+        try {
+          (element as any).webkitRequestFullscreen();
+        } catch {
+          setIsTheaterMode(true);
+        }
+      } else {
+        setIsTheaterMode(true);
+      }
+    } else {
+      if (document.exitFullscreen) {
+        document.exitFullscreen().catch(() => {});
+      } else if ((document as any).webkitExitFullscreen) {
+        try {
+          (document as any).webkitExitFullscreen();
+        } catch {}
+      }
+      setIsTheaterMode(false);
+    }
+  };
 
   // Logical coordinate space baseline
   const BASE_WIDTH = 1200;
@@ -96,6 +142,8 @@ export default function CosmicField({
     // Timing stats
     startTimeMs: 0,
     bossesSlayed: 0,
+    kremlinsSlayed: 0,
+    boostsPerformed: 0,
 
     // Spawning metrics
     kremlinSpawnTimer: 0,
@@ -266,6 +314,10 @@ export default function CosmicField({
     const pDamage = 1 + energyLvl * 0.2;
     const pWidth = 16 + (energyLvl >= 2 ? 6 : 0);
 
+    // Get active weapon's color
+    const activeWeapon = COSMIC_WEAPONS.find((w) => w.id === (stats.selectedWeaponId || 'laser_alpha')) || COSMIC_WEAPONS[0];
+    const weaponColor = activeWeapon.projectileColor;
+
     if (energyLvl >= 3) {
       // Dual parallel streams!
       s.projectiles.push({
@@ -275,7 +327,7 @@ export default function CosmicField({
         h: 6,
         speed: pSpeed,
         damage: pDamage,
-        color: skinRef.current.projectileColor,
+        color: weaponColor,
       });
       s.projectiles.push({
         x: 180 + 35,
@@ -284,7 +336,7 @@ export default function CosmicField({
         h: 6,
         speed: pSpeed,
         damage: pDamage,
-        color: skinRef.current.projectileColor,
+        color: weaponColor,
       });
     } else {
       // Standard projectile
@@ -295,7 +347,7 @@ export default function CosmicField({
         h: 6,
         speed: pSpeed,
         damage: pDamage,
-        color: skinRef.current.projectileColor,
+        color: weaponColor,
       });
     }
 
@@ -308,7 +360,7 @@ export default function CosmicField({
         h: 4,
         speed: pSpeed + 1,
         damage: 1,
-        color: skinRef.current.projectileColor,
+        color: weaponColor,
       });
 
       s.projectiles.push({
@@ -318,7 +370,7 @@ export default function CosmicField({
         h: 4,
         speed: pSpeed + 1,
         damage: 1,
-        color: skinRef.current.projectileColor,
+        color: weaponColor,
       });
     }
 
@@ -332,6 +384,7 @@ export default function CosmicField({
       s.isAccelerating = true;
       s.accelerationEndTime = Date.now() + s.boostDuration;
       s.boostCooldownEndTime = s.accelerationEndTime + s.cooldownPeriod;
+      s.boostsPerformed++;
       onAddNotification('ФОРСАЖ ДВИГУНА АКТИВОВАНО!', 'boost');
       playSound('boost');
     }
@@ -358,7 +411,7 @@ export default function CosmicField({
       if (e.key === ' ') {
         triggerWeaponFire();
       }
-      if (e.key === 'x' || e.key === 'X') {
+      if (e.key === 'x' || e.key === 'X' || e.key === 'Shift') {
         triggerEngineBoost();
       }
       if (e.key === 'p' || e.key === 'P') {
@@ -394,9 +447,20 @@ export default function CosmicField({
     const handleResize = () => {
       if (!containerRef.current || !canvas) return;
       const rect = containerRef.current.getBoundingClientRect();
-      canvas.width = Math.floor(rect.width);
-      // Constraint to 16:9 aspect ratio gracefully
-      canvas.height = Math.floor(rect.width * (9 / 16));
+      const parentWidth = Math.floor(rect.width);
+      const parentHeight = Math.floor(rect.height || rect.width * (9 / 16));
+      
+      let w = parentWidth;
+      let h = Math.floor(parentWidth * (9 / 16));
+      
+      // If calculated 16:9 height overflows parents' bounding vertical box, clamp height!
+      if (h > parentHeight && parentHeight > 50) {
+        h = parentHeight;
+        w = Math.floor(parentHeight * (16 / 9));
+      }
+      
+      canvas.width = w;
+      canvas.height = h;
     };
 
     window.addEventListener('resize', handleResize);
@@ -514,13 +578,37 @@ export default function CosmicField({
         const dynamicInterval = Math.max(50, 140 - Math.floor(s.score * 0.05));
         if (s.kremlinSpawnTimer >= dynamicInterval) {
           s.kremlinSpawnTimer = 0;
-          // Spawn tower hazard
-          const dynamicHeight = Math.random() * 100 + 130;
+          
+          // Randomize tower types related to Russian institutions
+          const types = ['spire', 'telecom', 'lubyanka', 'skyscraper', 'bunker'];
+          const chosenType = types[Math.floor(Math.random() * types.length)];
+          
+          let dynamicWidth = 55;
+          let dynamicHeight = Math.random() * 80 + 120;
+          
+          if (chosenType === 'spire') { // Spasskaya Spire
+            dynamicWidth = Math.floor(Math.random() * 20 + 45); // 45 to 65
+            dynamicHeight = Math.floor(Math.random() * 110 + 120); // 120 to 230
+          } else if (chosenType === 'telecom') { // Ostankino Tower
+            dynamicWidth = Math.floor(Math.random() * 10 + 35); // 35 to 45
+            dynamicHeight = Math.floor(Math.random() * 120 + 170); // 170 to 290
+          } else if (chosenType === 'lubyanka') { // Lubyanka Citadel
+            dynamicWidth = Math.floor(Math.random() * 30 + 75); // 75 to 105
+            dynamicHeight = Math.floor(Math.random() * 60 + 100); // 100 to 160
+          } else if (chosenType === 'skyscraper') { // Gazprom Lakhta / Moscow City
+            dynamicWidth = Math.floor(Math.random() * 20 + 45); // 45 to 65
+            dynamicHeight = Math.floor(Math.random() * 110 + 160); // 160 to 270
+          } else if (chosenType === 'bunker') { // Stepped Bunker Mausoleum
+            dynamicWidth = Math.floor(Math.random() * 35 + 80); // 80 to 115
+            dynamicHeight = Math.floor(Math.random() * 40 + 85); // 85 to 125
+          }
+          
           s.kremlins.push({
             x: BASE_WIDTH + 80,
             y: Math.random() * (BASE_HEIGHT - dynamicHeight) + dynamicHeight / 2,
-            w: 55,
+            w: dynamicWidth,
             h: dynamicHeight,
+            type: chosenType,
           });
         }
 
@@ -748,7 +836,7 @@ export default function CosmicField({
 
               // Defeated!
               if (b.health <= 0) {
-                const killPoints = Math.round(300 * (1 + (stats.radarAntennaLevel || 0) * 0.15));
+                const killPoints = Math.round(100 * (1 + (stats.radarAntennaLevel || 0) * 0.15));
                 s.score += killPoints;
                 s.bossesSlayed++;
                 playSound('explosion');
@@ -816,35 +904,185 @@ export default function CosmicField({
           const kH = k.h * flexScale;
           const kY = k.y * flexScale;
 
-          // Main tower block
-          ctx.fillStyle = '#991B1B'; // Rich red
-          ctx.fillRect(kX - kW / 2, kY - kH / 2 + kH * 0.25, kW, kH * 0.75);
+          const kType = k.type || 'spire';
+          
+          if (kType === 'spire') {
+            // SPASSKAYA KREMLIN SPIRE (Red classic Kremlin)
+            // Main brick base
+            ctx.fillStyle = '#991B1B'; // Rich imperial red
+            ctx.fillRect(kX - kW / 2, kY - kH / 2 + kH * 0.25, kW, kH * 0.75);
 
-          // Top spire turret block
-          ctx.fillStyle = '#7F1D1D';
-          ctx.fillRect(kX - (kW * 0.7) / 2, kY - kH / 2, kW * 0.7, kH * 0.25);
+            // Archways/Gates cutouts
+            ctx.fillStyle = '#111827'; // Dark inside gate
+            ctx.fillRect(kX - kW * 0.15, kY + kH * 0.2, kW * 0.3, kH * 0.25);
+            ctx.fillStyle = '#F3F4F6'; // White decorative arches
+            ctx.fillRect(kX - kW * 0.35, kY - kH * 0.1, kW * 0.7, 6 * flexScale);
 
-          // Golden dome spire tip
-          ctx.fillStyle = '#F59E0B';
-          ctx.beginPath();
-          ctx.moveTo(kX, (kY - kH / 2 - 18) * flexScale);
-          ctx.lineTo(kX - kW * 0.25, (kY - kH / 2) * flexScale);
-          ctx.lineTo(kX + kW * 0.25, (kY - kH / 2) * flexScale);
-          ctx.fill();
+            // Symmetrical clock on the tower!
+            ctx.fillStyle = '#111827'; // Black clockface
+            ctx.beginPath();
+            ctx.arc(kX, kY + kH * 0.05, kW * 0.22, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.fillStyle = '#F59E0B'; // Gold hands & border
+            ctx.beginPath();
+            ctx.arc(kX, kY + kH * 0.05, kW * 0.18, 0, Math.PI * 2);
+            ctx.stroke();
 
-          // Golden Star above tip
-          ctx.fillStyle = '#FBBF24';
-          ctx.beginPath();
-          const starY = kY - kH / 2 - 25;
-          const sz = 6 * flexScale;
-          for (let sIdx = 0; sIdx < 5; sIdx++) {
-            ctx.lineTo(
-              kX + sz * Math.cos(((18 + sIdx * 72 - 90) * Math.PI) / 180),
-              starY * flexScale + sz * Math.sin(((18 + sIdx * 72 - 90) * Math.PI) / 180)
-            );
+            // Top spire deck
+            ctx.fillStyle = '#7F1D1D';
+            ctx.fillRect(kX - (kW * 0.7) / 2, kY - kH / 2, kW * 0.7, kH * 0.25);
+
+            // Golden dome cone
+            ctx.fillStyle = '#F59E0B';
+            ctx.beginPath();
+            ctx.moveTo(kX, kY - kH / 2 - 18 * flexScale);
+            ctx.lineTo(kX - kW * 0.22, kY - kH / 2);
+            ctx.lineTo(kX + kW * 0.22, kY - kH / 2);
+            ctx.fill();
+
+            // Red Kremlin Star above tip
+            ctx.fillStyle = '#EF4444';
+            ctx.beginPath();
+            const starY = kY - kH / 2 - 25 * flexScale;
+            const sz = 7 * flexScale;
+            for (let sIdx = 0; sIdx < 5; sIdx++) {
+              ctx.lineTo(
+                kX + sz * Math.cos(((18 + sIdx * 72 - 90) * Math.PI) / 180),
+                starY + sz * Math.sin(((18 + sIdx * 72 - 90) * Math.PI) / 180)
+              );
+            }
+            ctx.closePath();
+            ctx.fill();
+            
+          } else if (kType === 'telecom') {
+            // OSTANKINO TELECOM TOWER (High gray concrete needle)
+            // Concrete trunk
+            ctx.fillStyle = '#4B5563'; // Concrete gray
+            ctx.fillRect(kX - kW * 0.22, kY - kH / 2 + kH * 0.3, kW * 0.44, kH * 0.7);
+
+            // Wide concrete base support
+            ctx.fillStyle = '#374151';
+            ctx.beginPath();
+            ctx.moveTo(kX - kW * 0.22, kY + kH * 0.3);
+            ctx.lineTo(kX - kW * 0.5, kY + kH * 0.5);
+            ctx.lineTo(kX + kW * 0.5, kY + kH * 0.5);
+            ctx.lineTo(kX + kW * 0.22, kY + kH * 0.3);
+            ctx.fill();
+
+            // Cylindrical observation ring deck
+            ctx.fillStyle = '#1F2937';
+            ctx.fillRect(kX - kW * 0.5, kY - kH * 0.1, kW, kH * 0.12);
+            // Window cyan glow slits
+            ctx.fillStyle = '#06B6D4';
+            ctx.fillRect(kX - kW * 0.4, kY - kH * 0.08, kW * 0.8, 4 * flexScale);
+
+            // Intermediate platform ring
+            ctx.fillStyle = '#1F2937';
+            ctx.fillRect(kX - kW * 0.35, kY - kH * 0.32, kW * 0.7, kH * 0.05);
+
+            // Ultra thin upper metal spire antenna
+            ctx.fillStyle = '#9CA3AF';
+            ctx.fillRect(kX - 2 * flexScale, kY - kH / 2, 4 * flexScale, kH * 0.4);
+
+            // Blinking red beacon warn light at antenna tip
+            const isLit = (s.gameTime % 40) < 20;
+            ctx.fillStyle = isLit ? '#EF4444' : '#7F1D1D';
+            ctx.beginPath();
+            ctx.arc(kX, kY - kH / 2, 6 * flexScale, 0, Math.PI * 2);
+            ctx.fill();
+
+          } else if (kType === 'lubyanka') {
+            // LUBYANKA CITADEL (Dirty sandstone beige fortress)
+            // Boxy mass
+            ctx.fillStyle = '#D97706'; // Terracotta ochre brick
+            ctx.fillRect(kX - kW / 2, kY - kH / 2, kW, kH);
+
+            // Columns and borders
+            ctx.fillStyle = '#B45309';
+            ctx.fillRect(kX - kW * 0.45, kY - kH / 2, kW * 0.08, kH);
+            ctx.fillRect(kX + kW * 0.37, kY - kH / 2, kW * 0.08, kH);
+            ctx.fillRect(kX - kW / 2, kY - kH / 2, kW, 8 * flexScale);
+
+            // Rows of prison cells windows
+            ctx.fillStyle = '#111827';
+            const cols = 4;
+            const rows = 4;
+            const winW = (kW * 0.5) / cols;
+            const winH = (kH * 0.5) / rows;
+            for (let r = 0; r < rows; r++) {
+              for (let c = 0; c < cols; c++) {
+                ctx.fillRect(
+                  kX - kW * 0.35 + c * (winW + kW * 0.08),
+                  kY - kH * 0.3 + r * (winH + kH * 0.08),
+                  winW,
+                  winH
+                );
+              }
+            }
+
+            // Central heavy iron gates
+            ctx.fillStyle = '#1F2937';
+            ctx.fillRect(kX - kW * 0.18, kY + kH * 0.2, kW * 0.36, kH * 0.3);
+
+            // USSR coat of arms yellow star on building top face
+            ctx.fillStyle = '#EF4444';
+            ctx.beginPath();
+            ctx.arc(kX, kY - kH * 0.36, 10 * flexScale, 0, Math.PI * 2);
+            ctx.fill();
+
+          } else if (kType === 'skyscraper') {
+            // GAZPROM / LAKHTA SCI-FI BLUE CYLINDER (Tower of corporate oligarchs)
+            // Tapered glass prism
+            ctx.fillStyle = '#0F172A'; // Dark obsidian base
+            ctx.fillRect(kX - kW / 2, kY - kH / 2, kW, kH);
+
+            // Sparkling sky-blue glass panels
+            ctx.fillStyle = '#0284C7';
+            ctx.beginPath();
+            ctx.moveTo(kX - kW * 0.4, kY + kH / 2);
+            ctx.lineTo(kX - kW * 0.05, kY - kH / 2);
+            ctx.lineTo(kX + kW * 0.05, kY - kH / 2);
+            ctx.lineTo(kX + kW * 0.4, kY + kH / 2);
+            ctx.fill();
+
+            // Diagonal high-reflective neon corporate stripes
+            ctx.strokeStyle = '#38BDF8';
+            ctx.lineWidth = 2 * flexScale;
+            ctx.beginPath();
+            ctx.moveTo(kX - kW * 0.3, kY + kH * 0.3);
+            ctx.lineTo(kX + kW * 0.2, kY - kH * 0.2);
+            ctx.moveTo(kX - kW * 0.2, kY + kH * 0.4);
+            ctx.lineTo(kX + kW * 0.3, kY - kH * 0.1);
+            ctx.stroke();
+
+            // Gazprom peak logo circle
+            ctx.fillStyle = '#0EA5E9';
+            ctx.shadowColor = '#0EA5E9';
+            ctx.shadowBlur = 12 * flexScale;
+            ctx.beginPath();
+            ctx.arc(kX, kY - kH * 0.38, 8 * flexScale, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.shadowBlur = 0;
+
+          } else if (kType === 'bunker') {
+            // STEPPED GRANITE MAUSOLEUM FORTRESS
+            // Bottom step
+            ctx.fillStyle = '#1F2937'; // Dark granite block
+            ctx.fillRect(kX - kW / 2, kY + kH * 0.1, kW, kH * 0.4);
+
+            // Middle step
+            ctx.fillStyle = '#7F1D1D'; // Maroon red granite
+            ctx.fillRect(kX - kW * 0.38, kY - kH * 0.2, kW * 0.76, kH * 0.3);
+
+            // Top cube
+            ctx.fillStyle = '#450A0A'; // Blackened crimson brick
+            ctx.fillRect(kX - kW * 0.22, kY - kH * 0.5, kW * 0.44, kH * 0.3);
+
+            // Cold bronze emblem (Hammer & sickle representation)
+            ctx.fillStyle = '#FBBF24';
+            ctx.fillRect(kX - kW * 0.08, kY - kH * 0.12, kW * 0.16, 4 * flexScale);
+            ctx.fillRect(kX - 2 * flexScale, kY - kH * 0.16, 4 * flexScale, 10 * flexScale);
           }
-          ctx.closePath();
-          ctx.fill();
 
           ctx.restore();
 
@@ -859,6 +1097,7 @@ export default function CosmicField({
             if (p.x > kL && p.x < kR && p.y > kT && p.y < kB) {
               s.projectiles.splice(j, 1);
               s.kremlins.splice(i, 1);
+              s.kremlinsSlayed++;
               
               const pointsEarned = Math.round(15 * (1 + (stats.radarAntennaLevel || 0) * 0.15));
               s.score += pointsEarned;
@@ -1010,7 +1249,7 @@ export default function CosmicField({
         s.particles.push(new Particle(180, s.rocketY, '#FF6347'));
       }
 
-      onGameFinished(s.score, s.bossesSlayed);
+      onGameFinished(s.score, s.bossesSlayed, s.kremlinsSlayed, s.boostsPerformed);
     };
 
     // Begin looping
@@ -1020,7 +1259,7 @@ export default function CosmicField({
       cancelAnimationFrame(animId);
       window.removeEventListener('resize', handleResize);
     };
-  }, [gameState, soundEnabled, setGameState]);
+  }, [gameState, soundEnabled, setGameState, isTheaterMode]);
 
   // Restart trigger
   const handleRestart = () => {
@@ -1028,6 +1267,8 @@ export default function CosmicField({
     s.score = 0;
     s.gameTime = 0;
     s.bossesSlayed = 0;
+    s.kremlinsSlayed = 0;
+    s.boostsPerformed = 0;
     s.isBossActive = false;
     s.boss = null;
     s.nextBossSpawnScore = 1000;
@@ -1053,13 +1294,31 @@ export default function CosmicField({
   return (
     <div
       ref={containerRef}
-      className="relative w-full aspect-video rounded-2xl overflow-hidden border border-slate-800 bg-slate-950 shadow-[0_10px_40px_rgba(0,0,0,0.6)] flex items-center justify-center font-sans"
+      className={
+        isTheaterMode
+          ? "fixed inset-0 z-50 w-screen h-screen bg-black flex items-center justify-center font-sans overflow-hidden"
+          : "relative w-full aspect-video rounded-2xl overflow-hidden border border-slate-800 bg-slate-950 shadow-[0_10px_40px_rgba(0,0,0,0.6)] flex items-center justify-center font-sans"
+      }
       id="game-canvas-area"
     >
-      <canvas ref={canvasRef} className="block w-full h-full rounded-2xl shadow-inner" id="game-canvas" />
+      <canvas
+        ref={canvasRef}
+        className={isTheaterMode ? "block shadow-inner" : "block w-full h-full rounded-2xl shadow-inner"}
+        style={isTheaterMode ? { width: 'auto', height: 'auto', maxWidth: '100vw', maxHeight: '100vh', aspectRatio: '16/9' } : undefined}
+        id="game-canvas"
+      />
 
       {/* Floating HUD controls on upper canvas */}
       <div className="absolute top-4 right-4 z-20 flex items-center gap-2">
+        <button
+          onClick={handleToggleFullscreen}
+          className="p-2 rounded-lg bg-slate-900/80 border border-slate-700/60 text-slate-300 hover:text-cyan-400 hover:border-cyan-500/50 transition cursor-pointer flex items-center justify-center"
+          title={isTheaterMode ? "Згорнути на весь екран" : "Розгорнути на весь екран"}
+          id="fullscreen-toggle-btn"
+        >
+          {isTheaterMode ? <Minimize className="w-4 h-4" /> : <Maximize className="w-4 h-4" />}
+        </button>
+
         <button
           onClick={() => setSoundEnabled(!soundEnabled)}
           className="p-2 rounded-lg bg-slate-900/80 border border-slate-700/60 text-slate-300 hover:text-cyan-400 hover:border-cyan-500/50 transition cursor-pointer"

@@ -4,9 +4,9 @@
  */
 
 import React from 'react';
-import { PlayerStats, ROCKET_SKINS, RocketSkin } from '../types';
-import { Shield, Flame, Zap, Award, Check, ShoppingBag, Coins, ArrowUp, Lock } from 'lucide-react';
-import { isSkinUnlocked } from '../utils/cache';
+import { PlayerStats, ROCKET_SKINS, RocketSkin, CosmicWeapon, COSMIC_WEAPONS } from '../types';
+import { Shield, Flame, Zap, Award, Check, ShoppingBag, Coins, ArrowUp, Lock, Target } from 'lucide-react';
+import { isSkinUnlocked, isWeaponUnlocked } from '../utils/cache';
 
 interface StorePageProps {
   stats: PlayerStats;
@@ -75,16 +75,6 @@ export default function StorePage({ stats, onUpdateStats, onAddNotification }: S
     },
   ];
 
-  // Price schema for ships if they lack achievement highscore requirements
-  const SHIP_CREDIT_PRICES: Record<string, number> = {
-    classic: 0,
-    plasma: 200,
-    phoenix: 500,
-    cyber: 1200,
-    void: 2500,
-    orion: 5000,
-  };
-
   const handleBuyComponent = (componentId: string, level: number, cost: number) => {
     if (stats.credits < cost) {
       onAddNotification('Недостатньо кредитів для підтвердження покращення', 'info');
@@ -104,20 +94,20 @@ export default function StorePage({ stats, onUpdateStats, onAddNotification }: S
     onAddNotification(`Покращено ${componentId.toUpperCase()} до рівня ${level}!`, 'achievement');
   };
 
-  const handleBuyShip = (skin: RocketSkin, price: number) => {
-    if (stats.credits < price) {
-      onAddNotification('Недостатньо кредитів для купівлі даної моделі винищувача', 'info');
+  const handleBuyWeapon = (weapon: CosmicWeapon) => {
+    if (stats.credits < weapon.price) {
+      onAddNotification('Недостатньо кредитів для купівлі цього модуля озброєння', 'info');
       return;
     }
 
-    const currentUnlocked = stats.unlockedSkinIds || ['classic'];
-    if (currentUnlocked.includes(skin.id)) return;
+    const currentUnlocked = stats.unlockedWeaponIds || ['laser_alpha'];
+    if (currentUnlocked.includes(weapon.id)) return;
 
     onUpdateStats({
-      credits: stats.credits - price,
-      unlockedSkinIds: [...currentUnlocked, skin.id],
+      credits: stats.credits - weapon.price,
+      unlockedWeaponIds: [...currentUnlocked, weapon.id],
     });
-    onAddNotification(`Судно нового класу "${skin.name}" успішно придбано!`, 'achievement');
+    onAddNotification(`Модуль зброї нового класу "${weapon.name}" успішно придбано! Його можна встановити в Ангарі.`, 'achievement');
   };
 
   return (
@@ -146,104 +136,81 @@ export default function StorePage({ stats, onUpdateStats, onAddNotification }: S
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-        {/* Panel A: Spacecraft Ship Yard */}
+        {/* Panel A: Armory & Weapons Yard */}
         <div className="flex flex-col gap-4">
-          <h3 className="text-sm font-black font-mono text-cyan-400 uppercase tracking-widest flex items-center gap-2 border-b border-slate-800 pb-2.5">
-            <ShoppingBag className="w-4 h-4" />
-            Зоряна верф винищувачів
+          <h3 className="text-sm font-black font-mono text-emerald-400 uppercase tracking-widest flex items-center gap-2 border-b border-slate-800 pb-2.5">
+            <Target className="w-4 h-4" />
+            Магазин зброї та гармат
           </h3>
 
           <div className="flex flex-col gap-3">
-            {ROCKET_SKINS.map((skin) => {
-              const isUnlockedAlready = isSkinUnlocked(skin.id, stats);
-              const isEquipped = stats.selectedSkinId === skin.id;
-              const price = SHIP_CREDIT_PRICES[skin.id] || 0;
+            {COSMIC_WEAPONS.map((weapon) => {
+              const isUnlockedAlready = isWeaponUnlocked(weapon.id, stats);
+              const isEquipped = stats.selectedWeaponId === weapon.id;
 
               return (
                 <div
-                  key={skin.id}
+                  key={weapon.id}
                   className={`p-4 rounded-xl border flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 transition-all ${
                     isEquipped
-                      ? 'bg-cyan-950/20 border-cyan-400/80'
+                      ? 'bg-emerald-950/20 border-emerald-500/80'
                       : isUnlockedAlready
-                      ? 'bg-slate-900/50 border-slate-805 hover:bg-slate-900/80'
+                      ? 'bg-slate-900/50 border-slate-705 hover:bg-slate-900/80'
                       : 'bg-slate-950/80 border-slate-950/50'
                   }`}
-                  id={`store-ship-${skin.id}`}
+                  id={`store-weapon-${weapon.id}`}
                 >
                   <div className="flex items-center gap-3">
-                    {/* Visual colored icon */}
+                    {/* Color glow preview */}
                     <div
                       className="w-10 h-10 rounded-lg flex items-center justify-center p-1 border border-slate-800"
-                      style={{ backgroundColor: `${skin.bodyColor}15` }}
+                      style={{ backgroundColor: `${weapon.projectileColor}15` }}
                     >
-                      <div className="relative flex items-center">
-                        <div
-                          className="w-3 h-1.5 rounded-l-full"
-                          style={{ backgroundColor: skin.flameColor }}
-                        />
-                        <div
-                          className="w-5.5 h-3 rounded-r-lg"
-                          style={{ backgroundColor: skin.bodyColor }}
-                        />
-                      </div>
+                      <div className="w-6 h-1.5 rounded-full" style={{ backgroundColor: weapon.projectileColor, boxShadow: `0 0 6px ${weapon.projectileColor}` }} />
                     </div>
 
                     <div>
                       <h4 className="text-xs font-bold text-slate-100 flex items-center gap-1.5">
-                        {skin.name}
+                        {weapon.name}
                         {isEquipped && (
-                          <span className="inline-flex items-center justify-center h-4 px-1.5 rounded bg-cyan-400 text-slate-950 font-mono text-[9px] font-bold">
-                            Екіпіровано
+                          <span className="inline-flex items-center justify-center h-4 px-1.5 rounded bg-emerald-500 text-slate-950 font-mono text-[9px] font-bold">
+                            Встановлено
                           </span>
                         )}
                       </h4>
                       <p className="text-[11px] text-slate-400 font-sans mt-0.5 leading-relaxed">
-                        {skin.description}
+                        {weapon.description}
                       </p>
                     </div>
                   </div>
 
-                  {/* Actions purchase/equip */}
+                  {/* Actions purchase */}
                   <div className="flex items-center gap-2 self-end sm:self-auto">
                     {isUnlockedAlready ? (
-                      isEquipped ? (
-                        <span className="text-[10px] font-mono font-bold text-cyan-400 uppercase px-2.5 py-1 bg-cyan-950/50 border border-cyan-500/20 rounded-lg">
-                          Змонтовано
-                        </span>
-                      ) : (
-                        <button
-                          onClick={() => {
-                            onUpdateStats({ selectedSkinId: skin.id });
-                            onAddNotification(`Активовано корабель "${skin.name}"!`, 'info');
-                          }}
-                          className="text-[10px] font-mono font-bold text-slate-200 hover:text-cyan-400 hover:bg-slate-800 transition px-3 py-1 bg-slate-900 border border-slate-700 rounded-lg cursor-pointer"
-                        >
-                          Активувати
-                        </button>
-                      )
+                      <span className="text-[10px] font-mono font-bold text-emerald-400 uppercase px-2.5 py-1 bg-emerald-950/30 border border-emerald-500/20 rounded-lg">
+                        Придбано
+                      </span>
                     ) : (
-                      <div className="flex items-center gap-1.5">
-                        <span className="text-[10px] text-slate-500 font-mono flex items-center gap-0.5" title="Потрібен рекорд">
-                          <Lock className="w-3 h-3" /> {skin.unlockScore} балів
-                        </span>
-                        <button
-                          onClick={() => handleBuyShip(skin, price)}
-                          disabled={stats.credits < price}
-                          className={`text-[10px] font-mono font-bold text-slate-950 px-3 py-1 rounded-lg transition cursor-pointer flex items-center gap-1 ${
-                            stats.credits >= price
-                              ? 'bg-amber-400 hover:bg-amber-300'
-                              : 'bg-slate-800 text-slate-500 opacity-50 cursor-not-allowed'
-                          }`}
-                        >
-                          Купити за {price} кр.
-                        </button>
-                      </div>
+                      <button
+                        onClick={() => handleBuyWeapon(weapon)}
+                        disabled={stats.credits < weapon.price}
+                        className={`text-[10px] font-mono font-bold text-slate-950 px-3 py-1.5 rounded-lg transition cursor-pointer flex items-center gap-1 whitespace-nowrap ${
+                          stats.credits >= weapon.price
+                            ? 'bg-amber-400 hover:bg-amber-300 shadow-md'
+                            : 'bg-slate-800 text-slate-500 opacity-50 cursor-not-allowed'
+                        }`}
+                      >
+                        Придбати за {weapon.price} кр.
+                      </button>
                     )}
                   </div>
                 </div>
               );
             })}
+          </div>
+
+          <div className="bg-slate-950/40 border border-slate-900/90 rounded-xl p-3 sm:p-4 text-xs text-slate-400 leading-relaxed font-sans">
+            🚀 <strong className="text-cyan-400">Примітки щодо Кораблів:</strong> Відтепер кораблі винищувачі не можна купувати за кредити! Вони автоматично розблоковуються в <strong className="text-slate-100">Ангарі</strong> досягненням відповідного рекорду (балів) за <strong className="text-amber-400">один окремий політ</strong>.
           </div>
         </div>
 
