@@ -21,8 +21,9 @@ interface CosmicFieldProps {
   stats: PlayerStats;
 }
 
-// Particle class for explosion effects
-class Particle {
+// Particle type for explosion effects
+interface PoolParticle {
+  active: boolean;
   x: number;
   y: number;
   vx: number;
@@ -31,35 +32,6 @@ class Particle {
   color: string;
   alpha: number;
   decay: number;
-
-  constructor(x: number, y: number, color: string) {
-    this.x = x;
-    this.y = y;
-    const angle = Math.random() * Math.PI * 2;
-    const speed = Math.random() * 5 + 2;
-    this.vx = Math.cos(angle) * speed;
-    this.vy = Math.sin(angle) * speed;
-    this.radius = Math.random() * 3 + 1.5;
-    this.color = color;
-    this.alpha = 1;
-    this.decay = Math.random() * 0.02 + 0.015;
-  }
-
-  update() {
-    this.x += this.vx;
-    this.y += this.vy;
-    this.alpha -= this.decay;
-  }
-
-  draw(ctx: CanvasRenderingContext2D, flexScale: number) {
-    ctx.save();
-    ctx.globalAlpha = this.alpha;
-    ctx.fillStyle = this.color;
-    ctx.beginPath();
-    ctx.arc(this.x * flexScale, this.y * flexScale, this.radius * flexScale, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.restore();
-  }
 }
 
 // Cached AudioContext to avoid massive resource leaking at high score/high shooting rate
@@ -219,11 +191,45 @@ export default function CosmicField({
 
     // Entities lists
     stars: [] as Array<{ x: number; y: number; r: number; speed: number; color: string; depth?: number }>,
-    projectiles: [] as any[],
-    bossProjectiles: [] as any[],
-    kremlins: [] as any[],
+    projectiles: Array.from({ length: 300 }, () => ({
+      active: false,
+      x: 0,
+      y: 0,
+      w: 0,
+      h: 0,
+      speed: 0,
+      damage: 0,
+      color: '',
+    })),
+    bossProjectiles: Array.from({ length: 250 }, () => ({
+      active: false,
+      x: 0,
+      y: 0,
+      r: 0,
+      speed: 0,
+      isHeavy: false,
+    })),
+    kremlins: Array.from({ length: 120 }, () => ({
+      active: false,
+      x: 0,
+      y: 0,
+      w: 0,
+      h: 0,
+      type: '',
+      isWaveObstacle: false,
+    })),
     powerUpStars: [] as any[],
-    particles: [] as Particle[],
+    particles: Array.from({ length: 1500 }, () => ({
+      active: false,
+      x: 0,
+      y: 0,
+      vx: 0,
+      vy: 0,
+      radius: 0,
+      color: '',
+      alpha: 0,
+      decay: 0,
+    })),
 
     // Boss attributes
     isBossActive: false,
@@ -238,6 +244,148 @@ export default function CosmicField({
   });
 
   const skinRef = useRef<RocketSkin>(ROCKET_SKINS[0]);
+
+  // Object pooling circular indices for constant timing and zero allocation
+  const pIdxRef = useRef(0);
+  const bpIdxRef = useRef(0);
+  const kIdxRef = useRef(0);
+  const partIdxRef = useRef(0);
+
+  const spawnParticle = (x: number, y: number, color: string) => {
+    const s = stateRef.current;
+    const pool = s.particles;
+    const len = pool.length;
+    for (let i = 0; i < len; i++) {
+      const idx = (partIdxRef.current + i) % len;
+      if (!pool[idx].active) {
+        const p = pool[idx];
+        p.active = true;
+        p.x = x;
+        p.y = y;
+        const angle = Math.random() * Math.PI * 2;
+        const speed = Math.random() * 5 + 2;
+        p.vx = Math.cos(angle) * speed;
+        p.vy = Math.sin(angle) * speed;
+        p.radius = Math.random() * 3 + 1.5;
+        p.color = color;
+        p.alpha = 1;
+        p.decay = Math.random() * 0.02 + 0.015;
+        partIdxRef.current = (idx + 1) % len;
+        return;
+      }
+    }
+    // Fallback circular override
+    const idx = partIdxRef.current;
+    const p = pool[idx];
+    p.active = true;
+    p.x = x;
+    p.y = y;
+    const angle = Math.random() * Math.PI * 2;
+    const speed = Math.random() * 5 + 2;
+    p.vx = Math.cos(angle) * speed;
+    p.vy = Math.sin(angle) * speed;
+    p.radius = Math.random() * 3 + 1.5;
+    p.color = color;
+    p.alpha = 1;
+    p.decay = Math.random() * 0.02 + 0.015;
+    partIdxRef.current = (idx + 1) % len;
+  };
+
+  const spawnProjectile = (x: number, y: number, w: number, h: number, speed: number, damage: number, color: string) => {
+    const s = stateRef.current;
+    const pool = s.projectiles;
+    const len = pool.length;
+    for (let i = 0; i < len; i++) {
+      const idx = (pIdxRef.current + i) % len;
+      if (!pool[idx].active) {
+        const p = pool[idx];
+        p.active = true;
+        p.x = x;
+        p.y = y;
+        p.w = w;
+        p.h = h;
+        p.speed = speed;
+        p.damage = damage;
+        p.color = color;
+        pIdxRef.current = (idx + 1) % len;
+        return;
+      }
+    }
+    // Fallback Circular Override
+    const idx = pIdxRef.current;
+    const p = pool[idx];
+    p.active = true;
+    p.x = x;
+    p.y = y;
+    p.w = w;
+    p.h = h;
+    p.speed = speed;
+    p.damage = damage;
+    p.color = color;
+    pIdxRef.current = (idx + 1) % len;
+  };
+
+  const spawnBossProjectile = (x: number, y: number, r: number, speed: number, isHeavy: boolean) => {
+    const s = stateRef.current;
+    const pool = s.bossProjectiles;
+    const len = pool.length;
+    for (let i = 0; i < len; i++) {
+      const idx = (bpIdxRef.current + i) % len;
+      if (!pool[idx].active) {
+        const bp = pool[idx];
+        bp.active = true;
+        bp.x = x;
+        bp.y = y;
+        bp.r = r;
+        bp.speed = speed;
+        bp.isHeavy = isHeavy;
+        bpIdxRef.current = (idx + 1) % len;
+        return;
+      }
+    }
+    // Fallback override oldest
+    const idx = bpIdxRef.current;
+    const bp = pool[idx];
+    bp.active = true;
+    bp.x = x;
+    bp.y = y;
+    bp.r = r;
+    bp.speed = speed;
+    bp.isHeavy = isHeavy;
+    bpIdxRef.current = (idx + 1) % len;
+  };
+
+  const spawnKremlin = (x: number, y: number, w: number, h: number, type: string, isWaveObstacle: boolean) => {
+    const s = stateRef.current;
+    const pool = s.kremlins;
+    const len = pool.length;
+    for (let i = 0; i < len; i++) {
+      const idx = (kIdxRef.current + i) % len;
+      if (!pool[idx].active) {
+        const k = pool[idx];
+        k.active = true;
+        k.x = x;
+        k.y = y;
+        k.w = w;
+        k.h = h;
+        k.type = type;
+        k.isWaveObstacle = isWaveObstacle;
+        kIdxRef.current = (idx + 1) % len;
+        return;
+      }
+    }
+    // Fallback override oldest
+    const idx = kIdxRef.current;
+    const k = pool[idx];
+    k.active = true;
+    k.x = x;
+    k.y = y;
+    k.w = w;
+    k.h = h;
+    k.type = type;
+    k.isWaveObstacle = isWaveObstacle;
+    kIdxRef.current = (idx + 1) % len;
+  };
 
   // Audio synths for zero-dependency sounds
   const playSound = (type: 'shoot' | 'explosion' | 'star' | 'bossSpawn' | 'bossHit' | 'gameover' | 'boost') => {
@@ -392,58 +540,58 @@ export default function CosmicField({
 
     if (energyLvl >= 3) {
       // Dual parallel streams!
-      s.projectiles.push({
-        x: 180 + 35,
-        y: (s.rocketY || BASE_HEIGHT / 2) - 8,
-        w: pWidth,
-        h: 6,
-        speed: pSpeed,
-        damage: pDamage,
-        color: weaponColor,
-      });
-      s.projectiles.push({
-        x: 180 + 35,
-        y: (s.rocketY || BASE_HEIGHT / 2) + 8,
-        w: pWidth,
-        h: 6,
-        speed: pSpeed,
-        damage: pDamage,
-        color: weaponColor,
-      });
+      spawnProjectile(
+        180 + 35,
+        (s.rocketY || BASE_HEIGHT / 2) - 8,
+        pWidth,
+        6,
+        pSpeed,
+        pDamage,
+        weaponColor
+      );
+      spawnProjectile(
+        180 + 35,
+        (s.rocketY || BASE_HEIGHT / 2) + 8,
+        pWidth,
+        6,
+        pSpeed,
+        pDamage,
+        weaponColor
+      );
     } else {
       // Standard projectile
-      s.projectiles.push({
-        x: 180 + 35,
-        y: s.rocketY || BASE_HEIGHT / 2,
-        w: pWidth,
-        h: 6,
-        speed: pSpeed,
-        damage: pDamage,
-        color: weaponColor,
-      });
+      spawnProjectile(
+        180 + 35,
+        s.rocketY || BASE_HEIGHT / 2,
+        pWidth,
+        6,
+        pSpeed,
+        pDamage,
+        weaponColor
+      );
     }
 
     // Spawn satellite weapons if power-up is ticking
     if (s.miniRocketsActive) {
-      s.projectiles.push({
-        x: 180 + 20,
-        y: (s.rocketY || BASE_HEIGHT / 2) + miniOffsetTop,
-        w: 10,
-        h: 4,
-        speed: pSpeed + 1,
-        damage: 1,
-        color: weaponColor,
-      });
+      spawnProjectile(
+        180 + 20,
+        (s.rocketY || BASE_HEIGHT / 2) + miniOffsetTop,
+        10,
+        4,
+        pSpeed + 1,
+        1,
+        weaponColor
+      );
 
-      s.projectiles.push({
-        x: 180 + 20,
-        y: (s.rocketY || BASE_HEIGHT / 2) + miniOffsetBottom,
-        w: 10,
-        h: 4,
-        speed: pSpeed + 1,
-        damage: 1,
-        color: weaponColor,
-      });
+      spawnProjectile(
+        180 + 20,
+        (s.rocketY || BASE_HEIGHT / 2) + miniOffsetBottom,
+        10,
+        4,
+        pSpeed + 1,
+        1,
+        weaponColor
+      );
     }
 
     playSound('shoot');
@@ -650,13 +798,23 @@ export default function CosmicField({
       });
 
       // Render glowing particle debris explosions (pure aesthetic enhancement!)
-      for (let i = s.particles.length - 1; i >= 0; i--) {
+      for (let i = 0; i < s.particles.length; i++) {
         const p = s.particles[i];
-        p.update();
-        if (p.alpha <= 0) {
-          s.particles.splice(i, 1);
-        } else {
-          p.draw(ctx, flexScale);
+        if (p.active) {
+          p.x += p.vx;
+          p.y += p.vy;
+          p.alpha -= p.decay;
+          if (p.alpha <= 0) {
+            p.active = false;
+          } else {
+            ctx.save();
+            ctx.globalAlpha = p.alpha;
+            ctx.fillStyle = p.color;
+            ctx.beginPath();
+            ctx.arc(p.x * flexScale, p.y * flexScale, p.radius * flexScale, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.restore();
+          }
         }
       }
 
@@ -746,14 +904,7 @@ export default function CosmicField({
             const waveTowerTypes = ['spire', 'telecom', 'lubyanka', 'skyscraper', 'bunker'];
             const chosenType = waveTowerTypes[Math.floor(Math.random() * waveTowerTypes.length)];
 
-            s.kremlins.push({
-              x: BASE_WIDTH + 80,
-              y: y,
-              w: width,
-              h: height,
-              type: chosenType,
-              isWaveObstacle: true,
-            });
+            spawnKremlin(BASE_WIDTH + 80, y, width, height, chosenType, true);
 
             s.waveSpawnCount++;
             if (s.waveSpawnCount >= s.waveSpawnMax) {
@@ -792,13 +943,14 @@ export default function CosmicField({
               dynamicHeight = Math.floor(Math.random() * 40 + 85); // 85 to 125
             }
             
-            s.kremlins.push({
-              x: BASE_WIDTH + 80,
-              y: Math.random() * (BASE_HEIGHT - dynamicHeight) + dynamicHeight / 2,
-              w: dynamicWidth,
-              h: dynamicHeight,
-              type: chosenType,
-            });
+            spawnKremlin(
+              BASE_WIDTH + 80,
+              Math.random() * (BASE_HEIGHT - dynamicHeight) + dynamicHeight / 2,
+              dynamicWidth,
+              dynamicHeight,
+              chosenType,
+              false
+            );
           }
         }
 
@@ -814,27 +966,29 @@ export default function CosmicField({
         }
 
         // Check weapon fires and bullet updates
-        for (let i = s.projectiles.length - 1; i >= 0; i--) {
+        for (let i = 0; i < s.projectiles.length; i++) {
           const p = s.projectiles[i];
-          p.x += p.speed;
+          if (p.active) {
+            p.x += p.speed;
 
-          // Out of screen delete
-          if (p.x > BASE_WIDTH + 50) {
-            s.projectiles.splice(i, 1);
-            continue;
+            // Out of screen delete
+            if (p.x > BASE_WIDTH + 50) {
+              p.active = false;
+              continue;
+            }
+
+            // Bullet draw
+            ctx.fillStyle = p.color;
+            ctx.shadowColor = p.color;
+            ctx.shadowBlur = 8 * flexScale;
+            ctx.fillRect(
+              (p.x - p.w / 2) * flexScale,
+              (p.y - p.h / 2) * flexScale,
+              p.w * flexScale,
+              p.h * flexScale
+            );
+            ctx.shadowBlur = 0; // Clear shadow
           }
-
-          // Bullet draw
-          ctx.fillStyle = p.color;
-          ctx.shadowColor = p.color;
-          ctx.shadowBlur = 8 * flexScale;
-          ctx.fillRect(
-            (p.x - p.w / 2) * flexScale,
-            (p.y - p.h / 2) * flexScale,
-            p.w * flexScale,
-            p.h * flexScale
-          );
-          ctx.shadowBlur = 0; // Clear shadow
         }
 
         // Move gold buff stars
@@ -879,7 +1033,7 @@ export default function CosmicField({
 
             // Spawn sparkly gold particles
             for (let k = 0; k < 15; k++) {
-              s.particles.push(new Particle(star.x, star.y, '#FFD700'));
+              spawnParticle(star.x, star.y, '#FFD700');
             }
           } else if (star.x < -30) {
             s.powerUpStars.splice(i, 1);
@@ -966,37 +1120,16 @@ export default function CosmicField({
               
               if (b.type === 'tank') {
                 // Heavy slow blaster shell with larger radius, dealing massive damage
-                s.bossProjectiles.push({
-                  x: b.x - 55,
-                  y: b.y,
-                  r: 19,
-                  speed: 5.6,
-                  isHeavy: true,
-                });
+                spawnBossProjectile(b.x - 55, b.y, 19, 5.6, true);
                 playSound('shoot');
               } else if (b.type === 'air_defense') {
                 // Sector defense spawns rapid dual bursts!
-                s.bossProjectiles.push({
-                  x: b.x - 45,
-                  y: b.y - 14,
-                  r: 8,
-                  speed: 8.5,
-                });
-                s.bossProjectiles.push({
-                  x: b.x - 45,
-                  y: b.y + 14,
-                  r: 8,
-                  speed: 8.5,
-                });
+                spawnBossProjectile(b.x - 45, b.y - 14, 8, 8.5, false);
+                spawnBossProjectile(b.x - 45, b.y + 14, 8, 8.5, false);
                 playSound('shoot');
               } else {
                 // Commander
-                s.bossProjectiles.push({
-                  x: b.x - 45,
-                  y: b.y,
-                  r: 12,
-                  speed: 7.2,
-                });
+                spawnBossProjectile(b.x - 45, b.y, 12, 7.2, false);
                 playSound('shoot');
               }
             }
@@ -1244,38 +1377,39 @@ export default function CosmicField({
             ctx.restore();
 
             // Collision check: player bullets hit Boss
-            for (let i = s.projectiles.length - 1; i >= 0; i--) {
+            for (let i = 0; i < s.projectiles.length; i++) {
               const p = s.projectiles[i];
-              const bossL = b.x - b.w / 2;
-              const bossR = b.x + b.w / 2;
-              const bossT = b.y - b.h / 2;
-              const bossB = b.y + b.h / 2;
+              if (p.active) {
+                const bossL = b.x - b.w / 2;
+                const bossR = b.x + b.w / 2;
+                const bossT = b.y - b.h / 2;
+                const bossB = b.y + b.h / 2;
 
-              if (p.x > bossL && p.x < bossR && p.y > bossT && p.y < bossB) {
-                // Plated damage!
-                b.health -= p.damage;
-                s.projectiles.splice(i, 1);
-                
-                const hitPoints = Math.round(20 * (1 + (stats.radarAntennaLevel || 0) * 0.15) * config.multiplier);
-                s.score += hitPoints;
-                // Spark effects
-                for (let k = 0; k < 6; k++) {
-                  s.particles.push(new Particle(p.x, p.y, '#F59E0B'));
-                }
-                playSound('bossHit');
-
-                // Defeated!
-                if (b.health <= 0) {
-                  const killPoints = Math.round(150 * (1 + (stats.radarAntennaLevel || 0) * 0.15) * config.multiplier);
-                  s.score += killPoints;
-                  s.bossesSlayed++;
-                  playSound('explosion');
-
-                  // Major debris splash
-                  for (let k = 0; k < 35; k++) {
-                    s.particles.push(new Particle(b.x, b.y, '#FFFF00'));
-                    s.particles.push(new Particle(b.x, b.y, '#FF4500'));
+                if (p.x > bossL && p.x < bossR && p.y > bossT && p.y < bossB) {
+                  // Plated damage!
+                  b.health -= p.damage;
+                  p.active = false;
+                  
+                  const hitPoints = Math.round(20 * (1 + (stats.radarAntennaLevel || 0) * 0.15) * config.multiplier);
+                  s.score += hitPoints;
+                  // Spark effects
+                  for (let k = 0; k < 6; k++) {
+                    spawnParticle(p.x, p.y, '#F59E0B');
                   }
+                  playSound('bossHit');
+
+                  // Defeated!
+                  if (b.health <= 0) {
+                    const killPoints = Math.round(150 * (1 + (stats.radarAntennaLevel || 0) * 0.15) * config.multiplier);
+                    s.score += killPoints;
+                    s.bossesSlayed++;
+                    playSound('explosion');
+
+                    // Major debris splash
+                    for (let k = 0; k < 35; k++) {
+                      spawnParticle(b.x, b.y, '#FFFF00');
+                      spawnParticle(b.x, b.y, '#FF4500');
+                    }
 
                   onAddNotification(`🏆 ПЕРЕМОГА: ЗНИЩЕНО "${b.name.toUpperCase()}"! +${killPoints} балів зафіксовано`, 'achievement');
                   
@@ -1292,6 +1426,7 @@ export default function CosmicField({
                 break;
               }
             }
+          }
 
             // Collision check: player collides with boss directly
             const bLeft = b.x - b.w / 2 - 5;
@@ -1305,69 +1440,72 @@ export default function CosmicField({
         }
 
         // Move boss bullets
-        for (let i = s.bossProjectiles.length - 1; i >= 0; i--) {
+        for (let i = 0; i < s.bossProjectiles.length; i++) {
           const bp = s.bossProjectiles[i];
-          bp.x -= bp.speed;
+          if (bp.active) {
+            bp.x -= bp.speed;
 
-          // Render boss bullets
-          ctx.save();
-          if (bp.isHeavy) {
-            // Draw heavy fire charge with rotating safety line
-            ctx.fillStyle = '#EF4444';
-            ctx.shadowColor = '#FF0000';
-            ctx.shadowBlur = 12 * flexScale;
-            ctx.beginPath();
-            ctx.arc(bp.x * flexScale, bp.y * flexScale, bp.r * flexScale, 0, Math.PI * 2);
-            ctx.fill();
-            
-            // Core
-            ctx.fillStyle = '#FFFFFF';
-            ctx.beginPath();
-            ctx.arc(bp.x * flexScale, bp.y * flexScale, (bp.r / 2) * flexScale, 0, Math.PI * 2);
-            ctx.fill();
-          } else {
-            // Standard red plasma bullet with glowing core
-            ctx.fillStyle = '#EF4444';
-            ctx.beginPath();
-            ctx.arc(bp.x * flexScale, bp.y * flexScale, bp.r * flexScale, 0, Math.PI * 2);
-            ctx.fill();
-            
-            // Add yellow core
-            ctx.fillStyle = '#FBBF24';
-            ctx.beginPath();
-            ctx.arc(bp.x * flexScale, bp.y * flexScale, (bp.r * 0.45) * flexScale, 0, Math.PI * 2);
-            ctx.fill();
-          }
-          ctx.restore();
+            // Render boss bullets
+            ctx.save();
+            if (bp.isHeavy) {
+              // Draw heavy fire charge with rotating safety line
+              ctx.fillStyle = '#EF4444';
+              ctx.shadowColor = '#FF0000';
+              ctx.shadowBlur = 12 * flexScale;
+              ctx.beginPath();
+              ctx.arc(bp.x * flexScale, bp.y * flexScale, bp.r * flexScale, 0, Math.PI * 2);
+              ctx.fill();
+              
+              // Core
+              ctx.fillStyle = '#FFFFFF';
+              ctx.beginPath();
+              ctx.arc(bp.x * flexScale, bp.y * flexScale, (bp.r / 2) * flexScale, 0, Math.PI * 2);
+              ctx.fill();
+            } else {
+              // Standard red plasma bullet with glowing core
+              ctx.fillStyle = '#EF4444';
+              ctx.beginPath();
+              ctx.arc(bp.x * flexScale, bp.y * flexScale, bp.r * flexScale, 0, Math.PI * 2);
+              ctx.fill();
+              
+              // Add yellow core
+              ctx.fillStyle = '#FBBF24';
+              ctx.beginPath();
+              ctx.arc(bp.x * flexScale, bp.y * flexScale, (bp.r * 0.45) * flexScale, 0, Math.PI * 2);
+              ctx.fill();
+            }
+            ctx.restore();
 
-          // Check hit
-          const dx = bp.x - 180;
-          const dy = bp.y - s.rocketY;
-          const dist = Math.sqrt(dx * dx + dy * dy);
-          if (dist < bp.r + 20) {
-            s.bossProjectiles.splice(i, 1);
-            handlePlayerDeath();
-            continue;
-          }
+            // Check hit
+            const dx = bp.x - 180;
+            const dy = bp.y - s.rocketY;
+            const dist = Math.sqrt(dx * dx + dy * dy);
+            if (dist < bp.r + 20) {
+              bp.active = false;
+              handlePlayerDeath();
+              continue;
+            }
 
-          if (bp.x < -20) {
-            s.bossProjectiles.splice(i, 1);
+            if (bp.x < -20) {
+              bp.active = false;
+            }
           }
         }
 
         // Manage Kremlin obstacles
-        for (let i = s.kremlins.length - 1; i >= 0; i--) {
+        for (let i = 0; i < s.kremlins.length; i++) {
           const k = s.kremlins[i];
-          k.x -= calculatedGameSpeed;
+          if (k.active) {
+            k.x -= calculatedGameSpeed;
 
-          // Drawing Kremlin
-          ctx.save();
-          const kX = k.x * flexScale;
-          const kW = k.w * flexScale;
-          const kH = k.h * flexScale;
-          const kY = k.y * flexScale;
+            // Drawing Kremlin
+            ctx.save();
+            const kX = k.x * flexScale;
+            const kW = k.w * flexScale;
+            const kH = k.h * flexScale;
+            const kY = k.y * flexScale;
 
-          const kType = k.type || 'spire';
+            const kType = k.type || 'spire';
           
           if (kType === 'spire') {
             // SPASSKAYA KREMLIN SPIRE (Red classic Kremlin)
@@ -1551,36 +1689,38 @@ export default function CosmicField({
 
           // Bullet hits Kremlin checks
           let kremlinDestroyed = false;
-          for (let j = s.projectiles.length - 1; j >= 0; j--) {
+          for (let j = 0; j < s.projectiles.length; j++) {
             const p = s.projectiles[j];
-            const kL = k.x - k.w / 2;
-            const kR = k.x + k.w / 2;
-            const kT = k.y - k.h / 2 - 20;
-            const kB = k.y + k.h / 2;
+            if (p.active) {
+              const kL = k.x - k.w / 2;
+              const kR = k.x + k.w / 2;
+              const kT = k.y - k.h / 2 - 20;
+              const kB = k.y + k.h / 2;
 
-            if (p.x > kL && p.x < kR && p.y > kT && p.y < kB) {
-              s.projectiles.splice(j, 1);
-              s.kremlins.splice(i, 1);
-              s.kremlinsSlayed++;
-              
-              const pointsEarned = Math.round(15 * (1 + (stats.radarAntennaLevel || 0) * 0.15) * config.multiplier);
-              s.score += pointsEarned;
+              if (p.x > kL && p.x < kR && p.y > kT && p.y < kB) {
+                p.active = false;
+                k.active = false;
+                s.kremlinsSlayed++;
+                
+                const pointsEarned = Math.round(15 * (1 + (stats.radarAntennaLevel || 0) * 0.15) * config.multiplier);
+                s.score += pointsEarned;
 
-              // Debris splatter particles
-              for (let d = 0; d < 12; d++) {
-                s.particles.push(new Particle(p.x, p.y, '#EF4444'));
-                s.particles.push(new Particle(p.x, p.y, '#FBBF24'));
+                // Debris splatter particles
+                for (let d = 0; d < 12; d++) {
+                  spawnParticle(p.x, p.y, '#EF4444');
+                  spawnParticle(p.x, p.y, '#FBBF24');
+                }
+                playSound('explosion');
+
+                // Season transitions dynamically triggered
+                const nextSeasonIdx = Math.floor(s.score / 600) % SEASONS.length;
+                if (nextSeasonIdx !== s.currentSeasonIdx) {
+                  s.currentSeasonIdx = nextSeasonIdx;
+                  onAddNotification(`СЕКТОР ЗАЧИЩЕНО! ЛАСКАВО ПРОСИМО ДО СЕКТОРА "${SEASONS[nextSeasonIdx].name}"`, 'season');
+                }
+                kremlinDestroyed = true;
+                break;
               }
-              playSound('explosion');
-
-              // Season transitions dynamically triggered
-              const nextSeasonIdx = Math.floor(s.score / 600) % SEASONS.length;
-              if (nextSeasonIdx !== s.currentSeasonIdx) {
-                s.currentSeasonIdx = nextSeasonIdx;
-                onAddNotification(`СЕКТОР ЗАЧИЩЕНО! ЛАСКАВО ПРОСИМО ДО СЕКТОРА "${SEASONS[nextSeasonIdx].name}"`, 'season');
-              }
-              kremlinDestroyed = true;
-              break;
             }
           }
 
@@ -1603,7 +1743,8 @@ export default function CosmicField({
 
           // Clean off-screen spires
           if (k.x < -80) {
-            s.kremlins.splice(i, 1);
+            k.active = false;
+          }
           }
         }
       }
@@ -1719,7 +1860,7 @@ export default function CosmicField({
         
         // Push a circular blast of shield energy particles
         for (let k = 0; k < 20; k++) {
-          s.particles.push(new Particle(180, s.rocketY, '#10B981')); // emerald green shockwave
+          spawnParticle(180, s.rocketY, '#10B981'); // emerald green shockwave
         }
         return; // Survives!!
       }
@@ -1730,8 +1871,8 @@ export default function CosmicField({
 
       // Blow cockpit to absolute shreds
       for (let k = 0; k < 45; k++) {
-        s.particles.push(new Particle(180, s.rocketY, skinRef.current.bodyColor));
-        s.particles.push(new Particle(180, s.rocketY, '#FF6347'));
+        spawnParticle(180, s.rocketY, skinRef.current.bodyColor);
+        spawnParticle(180, s.rocketY, '#FF6347');
       }
 
       onGameFinished(s.score, s.bossesSlayed, s.kremlinsSlayed, s.boostsPerformed);
@@ -1761,11 +1902,11 @@ export default function CosmicField({
     s.shieldChargesLeft = stats.shieldCoreLevel || 0;
     s.boostDuration = 6000 + (stats.thrustCoreLevel || 0) * 1500;
     s.cooldownPeriod = 5000 - (stats.thrustCoreLevel || 0) * 1000;
-    s.kremlins = [];
-    s.projectiles = [];
-    s.bossProjectiles = [];
+    s.kremlins.forEach((k: any) => { k.active = false; });
+    s.projectiles.forEach((p: any) => { p.active = false; });
+    s.bossProjectiles.forEach((bp: any) => { bp.active = false; });
     s.powerUpStars = [];
-    s.particles = [];
+    s.particles.forEach((p: any) => { p.active = false; });
     s.miniRocketsActive = false;
     s.isAccelerating = false;
     s.rocketBaseY = BASE_HEIGHT / 2;
