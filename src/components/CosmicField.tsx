@@ -529,7 +529,7 @@ export default function CosmicField({
     const miniOffsetBottom = -15;
 
     // Upgrades modifiers
-    const energyLvl = stats.energyCoreLevel || 0;
+    const energyLvl = (stats.energyCoreLevel || 0) + (stats.overdriveActive ? 1 : 0);
     const pSpeed = 12.5 + energyLvl * 1.5;
     const pDamage = 1 + energyLvl * 0.2;
     const pWidth = 16 + (energyLvl >= 2 ? 6 : 0);
@@ -699,10 +699,10 @@ export default function CosmicField({
     s.baseGameSpeed = config.baseSpeed;
 
     // Sync upgrades initially
-    s.maxShieldCharges = stats.shieldCoreLevel || 0;
+    s.maxShieldCharges = (stats.shieldCoreLevel || 0) + (stats.starterShieldActive ? 1 : 0);
     // Keep current charge context intact or recharge if starting playing state
     if (s.gameState === 'start' || s.gameState === 'playing' && s.gameTime === 0) {
-      s.shieldChargesLeft = stats.shieldCoreLevel || 0;
+      s.shieldChargesLeft = (stats.shieldCoreLevel || 0) + (stats.starterShieldActive ? 1 : 0);
     }
     s.boostDuration = 6000 + (stats.thrustCoreLevel || 0) * 1500;
     s.cooldownPeriod = 5000 - (stats.thrustCoreLevel || 0) * 1000;
@@ -1805,6 +1805,43 @@ export default function CosmicField({
 
       const rY = s.rocketY;
 
+      // Draw Donation Combat Aura if donationsCredits is high!
+      const donationT = stats.donationsCredits || 0;
+      if (donationT >= 500) {
+        ctx.save();
+        let auraColor = '#EC4899'; // magenta
+        let shadowColor = '#F472B6';
+        if (donationT >= 50000) {
+          // Rainbow
+          const hue = (s.gameTime * 2.5) % 360;
+          auraColor = `hsla(${hue}, 90%, 65%, 0.85)`;
+          shadowColor = `hsla(${hue}, 90%, 65%, 1)`;
+        } else if (donationT >= 10000) {
+          // Gold
+          auraColor = 'rgba(245, 158, 11, 0.8)';
+          shadowColor = '#FBBF24';
+        } else if (donationT >= 2000) {
+          // Cyan
+          auraColor = 'rgba(6, 182, 212, 0.8)';
+          shadowColor = '#22D3EE';
+        }
+
+        ctx.strokeStyle = auraColor;
+        ctx.shadowColor = shadowColor;
+        ctx.shadowBlur = (8 + Math.sin(s.gameTime * 0.2) * 5) * flexScale;
+        ctx.lineWidth = 1.8 * flexScale;
+        
+        ctx.beginPath();
+        ctx.ellipse(180 * flexScale, rY * flexScale, 30 * flexScale, 20 * flexScale, (s.gameTime * 0.03), 0, Math.PI * 2);
+        ctx.stroke();
+
+        ctx.beginPath();
+        ctx.ellipse(180 * flexScale, rY * flexScale, 20 * flexScale, 30 * flexScale, -(s.gameTime * 0.03), 0, Math.PI * 2);
+        ctx.stroke();
+
+        ctx.restore();
+      }
+
       // Draw Glowing Shield Aura if pilot has shield charges left
       if (s.shieldChargesLeft > 0) {
         ctx.strokeStyle = '#10B981';
@@ -1898,8 +1935,8 @@ export default function CosmicField({
     s.isBossActive = false;
     s.bosses = [];
     s.nextBossSpawnScore = 3000;
-    s.maxShieldCharges = stats.shieldCoreLevel || 0;
-    s.shieldChargesLeft = stats.shieldCoreLevel || 0;
+    s.maxShieldCharges = (stats.shieldCoreLevel || 0) + (stats.starterShieldActive ? 1 : 0);
+    s.shieldChargesLeft = (stats.shieldCoreLevel || 0) + (stats.starterShieldActive ? 1 : 0);
     s.boostDuration = 6000 + (stats.thrustCoreLevel || 0) * 1500;
     s.cooldownPeriod = 5000 - (stats.thrustCoreLevel || 0) * 1000;
     s.kremlins.forEach((k: any) => { k.active = false; });

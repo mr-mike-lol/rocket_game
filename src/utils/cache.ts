@@ -25,7 +25,19 @@ const DEFAULT_STATS: PlayerStats = {
   radarAntennaLevel: 0,
   unlockedSkinIds: ['classic'],
   unlockedWeaponIds: ['laser_alpha'],
+  donationsCredits: 0,
+  starterShieldActive: false,
+  creditBonusActive: false,
+  overdriveActive: false,
 };
+
+export function getDonationDetails(donated: number) {
+  if (donated >= 50000) return { title: 'Герой Сектора 🇺🇦', color: 'text-amber-400 font-extrabold animate-pulse' };
+  if (donated >= 10000) return { title: 'Генерал Дронів 🦅', color: 'text-rose-400 font-bold' };
+  if (donated >= 2000) return { title: 'Зоряний Волонтер 🛡️', color: 'text-cyan-400 font-semibold' };
+  if (donated >= 500) return { title: 'Спонсор Кремлепаду 💣', color: 'text-purple-400 font-medium' };
+  return null;
+}
 
 const SEED_LEADERBOARD: LeaderboardEntry[] = [
   { id: '1', playerName: 'Alex_ZeroG', score: 3820, skinId: 'cyber', date: '2026-06-12' },

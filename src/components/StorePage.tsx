@@ -5,8 +5,8 @@
 
 import React from 'react';
 import { PlayerStats, ROCKET_SKINS, RocketSkin, CosmicWeapon, COSMIC_WEAPONS } from '../types';
-import { Shield, Flame, Zap, Award, Check, ShoppingBag, Coins, ArrowUp, Lock, Target } from 'lucide-react';
-import { isSkinUnlocked, isWeaponUnlocked } from '../utils/cache';
+import { Shield, Flame, Zap, Award, Check, ShoppingBag, Coins, ArrowUp, Lock, Target, Sparkles, Heart, Rocket } from 'lucide-react';
+import { isSkinUnlocked, isWeaponUnlocked, getDonationDetails } from '../utils/cache';
 
 interface StorePageProps {
   stats: PlayerStats;
@@ -108,6 +108,56 @@ export default function StorePage({ stats, onUpdateStats, onAddNotification }: S
       unlockedWeaponIds: [...currentUnlocked, weapon.id],
     });
     onAddNotification(`Модуль зброї нового класу "${weapon.name}" успішно придбано! Його можна встановити в Ангарі.`, 'achievement');
+  };
+
+  const handleDonate = (amount: number) => {
+    if (stats.credits < amount) {
+      onAddNotification('Недостатньо кредитів у бюджеті для цього внеску', 'info');
+      return;
+    }
+    const currentDonated = stats.donationsCredits || 0;
+    const nextDonated = currentDonated + amount;
+    
+    onUpdateStats({
+      credits: stats.credits - amount,
+      donationsCredits: nextDonated
+    });
+
+    const prevDetails = getDonationDetails(currentDonated);
+    const nextDetails = getDonationDetails(nextDonated);
+    
+    if (nextDetails && (!prevDetails || prevDetails.title !== nextDetails.title)) {
+      onAddNotification(`🎉 НОВИЙ РАНГ ОТРИМАНО: ${nextDetails.title}! Вашу бойову ауру покращено.`, 'achievement');
+    } else {
+      onAddNotification(`Дякуємо за внесок у ${amount} кр. на Космічні Дрони! Разом до перемоги! 🇺🇦`, 'achievement');
+    }
+  };
+
+  const handleBuyConsumable = (type: 'shield' | 'bonus' | 'overdrive', price: number) => {
+    if (stats.credits < price) {
+      onAddNotification('Недостатньо кредитів для придбання тактичного завантаження', 'info');
+      return;
+    }
+
+    const updates: Partial<PlayerStats> = {
+      credits: stats.credits - price
+    };
+
+    if (type === 'shield') {
+      if (stats.starterShieldActive) return;
+      updates.starterShieldActive = true;
+      onAddNotification('Тактичний модуль "+1 Shield" встановлено на наступний виліт!', 'achievement');
+    } else if (type === 'bonus') {
+      if (stats.creditBonusActive) return;
+      updates.creditBonusActive = true;
+      onAddNotification('Кредитний дешифратор "+50% Credits" інтегровано на наступний виліт!', 'achievement');
+    } else if (type === 'overdrive') {
+      if (stats.overdriveActive) return;
+      updates.overdriveActive = true;
+      onAddNotification('Гіпер-прискорювач реактальних тактик "Overdrive" активовано на наступний виліт!', 'achievement');
+    }
+
+    onUpdateStats(updates);
   };
 
   return (
@@ -299,6 +349,205 @@ export default function StorePage({ stats, onUpdateStats, onAddNotification }: S
                 </div>
               );
             })}
+          </div>
+        </div>
+      </div>
+
+      {/* Special Endgame section for repeatable sinks */}
+      <div className="border-t border-slate-800/80 pt-6 mt-4 flex flex-col gap-5">
+        <div className="flex flex-col gap-1">
+          <h2 className="text-md font-black font-mono text-cyan-400 uppercase tracking-wider flex items-center gap-2">
+            <Sparkles className="w-4.5 h-4.5 text-cyan-400" />
+            Спеціальне тактичне забезпечення та донати
+          </h2>
+          <p className="text-xs text-slate-400 font-sans">
+            Розділ для елітних пілотів: витрачайте накопичені кредити на разові бойові модулі або підтримайте фонд ЗСУ (Зоряних Сил України) для отримання унікальних аурових ефектів!
+          </p>
+        </div>
+
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+          {/* Column 1: Consumables */}
+          <div className="flex flex-col gap-4 bg-slate-900/10 p-5 rounded-2xl border border-slate-900/80">
+            <h3 className="text-xs font-black font-mono text-amber-400 uppercase tracking-widest flex items-center gap-2 border-b border-slate-800/60 pb-2">
+              <Rocket className="w-4 h-4 text-amber-400" />
+              Одноразові підсилювачі на наступний виліт
+            </h3>
+
+            <div className="flex flex-col gap-3">
+              {/* Shield Booster */}
+              <div className="p-3.5 rounded-xl bg-slate-950/60 border border-slate-850/70 flex items-center justify-between gap-4">
+                <div className="flex gap-2.5 flex-1 p-0.5 animate-fade-in">
+                  <div className="p-2 h-9 w-9 rounded-lg bg-emerald-500/10 text-emerald-400 flex items-center justify-center border border-emerald-500/15">
+                    <Shield className="w-4 h-4" />
+                  </div>
+                  <div>
+                    <h4 className="text-xs font-bold text-slate-200 block">Тактичний Стартовий Щит (+1)</h4>
+                    <p className="text-[10px] text-slate-400 font-sans mt-0.5 leading-relaxed">Встановлює додатковий заряд щитового ядра на наступний політ.</p>
+                  </div>
+                </div>
+                <div>
+                  {stats.starterShieldActive ? (
+                    <span className="text-[9px] font-mono font-black text-emerald-400 bg-emerald-950/40 border border-emerald-500/30 px-2.5 py-1.5 rounded-lg whitespace-nowrap">
+                      АКТИВОВАНО
+                    </span>
+                  ) : (
+                    <button
+                      onClick={() => handleBuyConsumable('shield', 200)}
+                      disabled={stats.credits < 200}
+                      className={`text-[10px] font-mono font-bold px-2.5 py-1.5 rounded-lg transition whitespace-nowrap cursor-pointer ${
+                        stats.credits >= 200
+                          ? 'bg-amber-400 text-slate-950 hover:bg-amber-300'
+                          : 'bg-slate-800/85 text-slate-500 cursor-not-allowed'
+                      }`}
+                    >
+                      Купити: 200 кр.
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              {/* Credit Booster */}
+              <div className="p-3.5 rounded-xl bg-slate-950/60 border border-slate-850/70 flex items-center justify-between gap-4">
+                <div className="flex gap-2.5 flex-1 p-0.5">
+                  <div className="p-2 h-9 w-9 rounded-lg bg-amber-500/10 text-amber-400 flex items-center justify-center border border-amber-500/15">
+                    <Coins className="w-4 h-4" />
+                  </div>
+                  <div>
+                    <h4 className="text-xs font-bold text-slate-200 block">Аналізатор Сигналів (+50% кр.)</h4>
+                    <p className="text-[10px] text-slate-400 font-sans mt-0.5 leading-relaxed">Множить усі кредити, здобуті в наступному польоті на х1.5.</p>
+                  </div>
+                </div>
+                <div>
+                  {stats.creditBonusActive ? (
+                    <span className="text-[9px] font-mono font-black text-emerald-400 bg-emerald-950/40 border border-emerald-500/30 px-2.5 py-1.5 rounded-lg whitespace-nowrap">
+                      АКТИВОВАНО
+                    </span>
+                  ) : (
+                    <button
+                      onClick={() => handleBuyConsumable('bonus', 350)}
+                      disabled={stats.credits < 350}
+                      className={`text-[10px] font-mono font-bold px-2.5 py-1.5 rounded-lg transition whitespace-nowrap cursor-pointer ${
+                        stats.credits >= 350
+                          ? 'bg-amber-400 text-slate-950 hover:bg-amber-300'
+                          : 'bg-slate-800/85 text-slate-500 cursor-not-allowed'
+                      }`}
+                    >
+                      Купити: 350 кр.
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              {/* Overdrive Booster */}
+              <div className="p-3.5 rounded-xl bg-slate-950/60 border border-slate-850/70 flex items-center justify-between gap-4">
+                <div className="flex gap-2.5 flex-1 p-0.5">
+                  <div className="p-2 h-9 w-9 rounded-lg bg-rose-500/10 text-rose-400 flex items-center justify-center border border-rose-500/15">
+                    <Zap className="w-4 h-4" />
+                  </div>
+                  <div>
+                    <h4 className="text-xs font-bold text-slate-200 block">Реакторний Овердрайв</h4>
+                    <p className="text-[10px] text-slate-400 font-sans mt-0.5 leading-relaxed">Тимчасово модернізує плазмові снаряди та додає +1 рівень усім гарматам.</p>
+                  </div>
+                </div>
+                <div>
+                  {stats.overdriveActive ? (
+                    <span className="text-[9px] font-mono font-black text-emerald-400 bg-emerald-950/40 border border-emerald-500/30 px-2.5 py-1.5 rounded-lg whitespace-nowrap">
+                      АКТИВОВАНО
+                    </span>
+                  ) : (
+                    <button
+                      onClick={() => handleBuyConsumable('overdrive', 500)}
+                      disabled={stats.credits < 500}
+                      className={`text-[10px] font-mono font-bold px-2.5 py-1.5 rounded-lg transition whitespace-nowrap cursor-pointer ${
+                        stats.credits >= 500
+                          ? 'bg-amber-400 text-slate-950 hover:bg-amber-300'
+                          : 'bg-slate-800/85 text-slate-500 cursor-not-allowed'
+                      }`}
+                    >
+                      Купити: 500 кр.
+                    </button>
+                  )}
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Column 2: Charity / Donations */}
+          <div className="flex flex-col gap-4 bg-slate-900/10 p-5 rounded-2xl border border-slate-900/80">
+            <h3 className="text-xs font-black font-mono text-emerald-400 uppercase tracking-widest flex items-center gap-2 border-b border-slate-800/60 pb-2">
+              <Heart className="w-4 h-4 text-rose-500 fill-rose-500 animate-pulse" />
+              Космічний фонд допомоги ЗФКО (Бойові Дрони)
+            </h3>
+
+            {/* Current Rank Panel */}
+            <div className="bg-slate-950/70 p-3 rounded-xl border border-slate-850 flex justify-between items-center text-xs">
+              <div>
+                <span className="text-[10px] font-mono text-slate-400 block uppercase">Загальний обсяг донатів</span>
+                <span className="text-sm font-bold font-mono text-emerald-400">{stats.donationsCredits || 0} кр.</span>
+              </div>
+              <div className="text-right">
+                <span className="text-[10px] font-mono text-slate-400 block uppercase">Поточне звання</span>
+                <span className={`text-xs font-bold ${getDonationDetails(stats.donationsCredits || 0)?.color || 'text-slate-400'}`}>
+                  {getDonationDetails(stats.donationsCredits || 0)?.title || 'Новобранець-Донатер'}
+                </span>
+              </div>
+            </div>
+
+            {/* Aura Progress Map */}
+            <div className="flex flex-col gap-1 text-[10px] font-sans text-slate-400">
+              <span className="font-mono text-slate-300 font-bold uppercase tracking-wider block mb-1">Рівні бойових аур за внески:</span>
+              <div className="grid grid-cols-2 gap-2 text-[10.5px]">
+                <div className="p-2 rounded bg-slate-950/40 border border-slate-850 flex items-center justify-between">
+                  <span>🟣 500 кр. — Спонсор Кремлепаду</span>
+                  <span className={stats.donationsCredits && stats.donationsCredits >= 500 ? 'text-emerald-400 font-bold' : 'text-slate-600'}>
+                    {stats.donationsCredits && stats.donationsCredits >= 500 ? 'активно' : 'закрито'}
+                  </span>
+                </div>
+                <div className="p-2 rounded bg-slate-950/40 border border-slate-850 flex items-center justify-between">
+                  <span>🔵 2000 кр. — Зоряний Волонтер</span>
+                  <span className={stats.donationsCredits && stats.donationsCredits >= 2000 ? 'text-cyan-400 font-bold' : 'text-slate-600'}>
+                    {stats.donationsCredits && stats.donationsCredits >= 2000 ? 'активно' : 'закрито'}
+                  </span>
+                </div>
+                <div className="p-2 rounded bg-slate-950/40 border border-slate-850 flex items-center justify-between">
+                  <span>🟡 10к кр. — General Drones</span>
+                  <span className={stats.donationsCredits && stats.donationsCredits >= 10000 ? 'text-yellow-400 font-bold' : 'text-slate-600'}>
+                    {stats.donationsCredits && stats.donationsCredits >= 10000 ? 'активно' : 'закрито'}
+                  </span>
+                </div>
+                <div className="p-2 rounded bg-slate-950/40 border border-slate-850 flex items-center justify-between">
+                  <span>🌈 50к кр. — Герой Сектора</span>
+                  <span className={stats.donationsCredits && stats.donationsCredits >= 50000 ? 'text-pink-400 font-bold animate-pulse' : 'text-slate-600'}>
+                    {stats.donationsCredits && stats.donationsCredits >= 50000 ? 'активно' : 'закрито'}
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            {/* Interaction Buttons */}
+            <div className="flex flex-col gap-2 mt-1">
+              <span className="text-[10px] font-mono text-slate-400 uppercase tracking-widest block">Обрати суму підтримки:</span>
+              <div className="grid grid-cols-4 gap-2">
+                {[100, 500, 2000, 10000].map((amt) => {
+                  const canDonate = stats.credits >= amt;
+                  return (
+                    <button
+                      key={amt}
+                      onClick={() => handleDonate(amt)}
+                      disabled={!canDonate}
+                      className={`py-2 text-[10.5px] font-mono font-bold rounded-lg transition flex flex-col items-center justify-center cursor-pointer ${
+                        canDonate
+                          ? 'bg-emerald-500/10 border border-emerald-500/40 text-emerald-400 hover:bg-emerald-500 hover:text-slate-950'
+                          : 'bg-slate-950 border border-slate-900 text-slate-600 cursor-not-allowed'
+                      }`}
+                    >
+                      <span>+{amt}</span>
+                      <span className="text-[8px] font-sans opacity-70">кр.</span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
           </div>
         </div>
       </div>

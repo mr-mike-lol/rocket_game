@@ -55,6 +55,12 @@ export interface PlayerStats {
   dailyMissionProgress?: number;
   dailyMissionClaimed?: boolean;
   dailyLastUpdated?: string;
+
+  // Repeatable endgame cash sinks
+  donationsCredits?: number;
+  starterShieldActive?: boolean;
+  creditBonusActive?: boolean;
+  overdriveActive?: boolean;
 }
 
 export interface GameNotification {

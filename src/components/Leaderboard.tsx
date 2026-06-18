@@ -5,7 +5,8 @@
 
 import React, { useState } from 'react';
 import { LeaderboardEntry, PlayerStats, ROCKET_SKINS } from '../types';
-import { Trophy, Calendar, Medal, Skull, Target, Zap, RotateCcw, User, Eye } from 'lucide-react';
+import { getDonationDetails } from '../utils/cache';
+import { Trophy, Calendar, Medal, Skull, Target, Zap, RotateCcw, User, Eye, Heart } from 'lucide-react';
 
 interface LeaderboardProps {
   stats: PlayerStats;
@@ -67,8 +68,13 @@ export default function Leaderboard({
                 </button>
               </form>
             ) : (
-              <div className="flex items-center gap-2 mt-1">
+              <div className="flex items-center gap-2.5 mt-1 flex-wrap">
                 <span className="text-md font-sans font-bold text-slate-100">{currentPlayerName}</span>
+                {getDonationDetails(stats.donationsCredits || 0) && (
+                  <span className={`text-[9px] px-1.5 py-0.5 rounded bg-slate-950/80 border border-slate-800/80 leading-tight font-sans font-black ${getDonationDetails(stats.donationsCredits || 0)?.color}`}>
+                    {getDonationDetails(stats.donationsCredits || 0)?.title}
+                  </span>
+                )}
                 <button
                   onClick={() => setEditingName(true)}
                   className="text-xs text-cyan-400 hover:underline hover:text-cyan-300 font-mono cursor-pointer"
@@ -196,9 +202,16 @@ export default function Leaderboard({
                           )}
                         </td>
                         <td className="py-3 px-3 font-semibold">
-                          <span className={`${isSelf ? 'text-cyan-400' : 'text-slate-200'}`}>
-                            {entry.playerName}
-                          </span>
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span className={`${isSelf ? 'text-cyan-400 font-bold' : 'text-slate-200'}`}>
+                              {entry.playerName}
+                            </span>
+                            {isSelf && getDonationDetails(stats.donationsCredits || 0) && (
+                              <span className={`text-[9px] px-1.5 py-0.5 rounded bg-slate-950/80 border border-slate-800/80 leading-tight font-sans font-black ${getDonationDetails(stats.donationsCredits || 0)?.color}`}>
+                                {getDonationDetails(stats.donationsCredits || 0)?.title}
+                              </span>
+                            )}
+                          </div>
                         </td>
                         <td className="py-3 px-3 font-mono text-[11px] text-slate-400">
                           {skin ? skin.name : 'Невідомо'}

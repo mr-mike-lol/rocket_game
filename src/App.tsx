@@ -135,8 +135,9 @@ export default function App() {
   const handleGameFinished = (finalScore: number, bossesDefeated: number, kremlinsDestroyed: number = 0, boostsPerformed: number = 0) => {
     const currentHighScore = Math.max(stats.highScore, finalScore);
     
-    // Earn 50% score as credits plus a clean 100 credits bonus per defeated boss!
-    const creditsEarned = Math.floor(finalScore * 0.5) + (bossesDefeated * 100);
+    // Earn 50% score as credits plus a clean 100 credits bonus per defeated boss! Include 1.5x modifier if creditBonusActive is set!
+    const baseCredits = Math.floor(finalScore * 0.5) + (bossesDefeated * 100);
+    const creditsEarned = stats.creditBonusActive ? Math.round(baseCredits * 1.5) : baseCredits;
     
     // In-game Daily Mission Progress updates
     let updatedProgress = stats.dailyMissionProgress || 0;
@@ -161,6 +162,9 @@ export default function App() {
       projectilesFired: stats.projectilesFired + Math.floor(finalScore * 0.15), 
       credits: (stats.credits || 0) + creditsEarned,
       dailyMissionProgress: updatedProgress,
+      starterShieldActive: false,
+      creditBonusActive: false,
+      overdriveActive: false,
     });
     setStats(updated);
 
@@ -172,7 +176,8 @@ export default function App() {
     });
     setLeaderboard(freshLeaderboard);
     
-    addNotification(`Виліт завершено. Зароблено +${creditsEarned} кр. для покращення космічного судна!`, 'achievement');
+    const boosterMessage = stats.creditBonusActive ? ' (Отримано +50% бустер-премії!)' : '';
+    addNotification(`Виліт завершено. Зароблено +${creditsEarned} кр. для покращення космічного судна! ${boosterMessage}`, 'achievement');
   };
 
   // Skin switch trigger
